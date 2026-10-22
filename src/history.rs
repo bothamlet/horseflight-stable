@@ -130,6 +130,20 @@ impl Game {
         Ok(())
     }
 
+    /// Apply an already-generated legal move without resolving it again.
+    ///
+    /// [`movegen`](crate::movegen) and `perft` produce legal moves that
+    /// [`Position::make_unchecked`] can apply directly; search generates one
+    /// legal list per node and uses this transition so it does not regenerate
+    /// that list for every child. Public callers must keep using
+    /// [`Game::play`], which validates the move.
+    pub(crate) fn play_generated(&mut self, movement: Move) -> Result<Undo, MoveError> {
+        let undo = self.current.make_unchecked(movement)?;
+        self.undos.push(undo);
+        self.positions.push(self.current);
+        Ok(undo)
+    }
+
     /// Undo the most recent move and restore the exact previous position.
     /// Returns the undone move, or `None` at the initial position.
     pub fn undo(&mut self) -> Result<Option<Move>, UnmakeError> {

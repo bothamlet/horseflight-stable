@@ -1,24 +1,32 @@
 #![forbid(unsafe_code)]
 
-//! Horseflight Phase 1A: an original, dependency-free chess-state foundation.
+//! Horseflight: an original, dependency-free chess foundation and first search.
 //!
-//! The crate provides typed squares/pieces/colours, a hybrid square-array plus
+//! Phase 1A provides typed squares/pieces/colours, a hybrid square-array plus
 //! occupancy-bitboard board, original ray-walking legal move generation,
 //! reversible in-place make/unmake with fixed-size undo and piece deltas,
 //! deterministic Zobrist hashing, FEN parsing/serialization, history-aware draw
-//! rules and perft. It contains no search, evaluation, neural-network, UCI or
-//! tablebase infrastructure.
+//! rules and perft. Phase 1B adds an original replaceable evaluation and a
+//! full-window negamax alpha-beta search with iterative deepening, previous-PV
+//! and MVV/LVA ordering and bounded quiescence.
 //!
-//! # Future search and evaluation boundary
+//! There is no transposition table, principal-variation search, aspiration
+//! window, null move, late-move reduction, selective pruning, neural-network,
+//! tablebase, UCI, GPU or threading infrastructure in this crate.
 //!
-//! A future searcher can own a [`Position`] and apply legal moves through
-//! [`Position::play`], keeping the returned [`Undo`] records on its own LIFO
-//! stack. [`Undo::piece_changes`] exposes the exact before/after change at every
-//! touched square, so an incremental evaluator can replay forward changes on
-//! make and reverse them on unmake without knowing move semantics. [`Game`] is
-//! the history/draw-rule layer, not a search API. Nothing here presumes a
-//! particular evaluator, search algorithm, transposition table or threading
-//! model.
+//! # Search and evaluation boundary
+//!
+//! [`search::search`] takes a [`Game`], an [`eval::Evaluator`] and a
+//! [`search::SearchConfig`], clones the game once and reports a truthful
+//! [`search::SearchResult`]. Search own only rule adjudication and terminal
+//! scoring; every leaf score comes from the evaluator. A caller that needs to
+//! interrupt a running search can pass a [`search::SearchControl`] to
+//! [`search::search_controlled`]; the token is standard-library-only, polled at
+//! node and claim-probe boundaries, and a never-cancelled token leaves
+//! [`search::search`] deterministic. [`Undo::piece_changes`]
+//! remains the interface a future incremental evaluator can consume; a future
+//! transposition table can key on [`Position::hash`], but draw-sensitive scores
+//! would also need the halfmove clock and path-dependent repetition context.
 //!
 //! # Hashes versus repetition identity
 //!
@@ -37,27 +45,31 @@
 //! It does not prove reachability and does not reject every illegal chess
 //! position (for example a side-not-to-move in check). Counters are `u32`; a
 //! legal move that would overflow one is rejected with
-//! [`MoveError::CounterOverflow`] without mutation.
+//! [`MoveError::CounterOverflow`] without mutation; search reports that as a
+//! [`search::SearchStop::Transition`] interruption rather than hiding it.
 //!
 //! Draw adjudication distinguishes automatic results (checkmate, stalemate,
 //! conservative insufficient material, fivefold repetition, seventy-five-move)
 //! from claimable rules (threefold repetition, fifty-move) in [`Game`]. The
 //! material test is deliberately conservative and is not a complete FIDE dead
-//! position proof.
+//! position proof. Search treats a claim as an optional zero-score action.
 
 mod attacks;
 pub mod bitboard;
 pub mod board;
+pub mod eval;
 pub mod fen;
 mod hash;
 pub mod history;
 pub mod movegen;
 pub mod perft;
 pub mod position;
+pub mod search;
 pub mod types;
 
 pub use bitboard::Bitboard;
 pub use board::{Board, BoardInvariantError};
+pub use eval::{Evaluator, HandcraftedEvaluator, MaterialEvaluator};
 pub use fen::FenError;
 pub use hash::ZOBRIST_SEED;
 pub use history::{DrawClaims, Game, Outcome};
@@ -65,5 +77,9 @@ pub use movegen::{legal_moves, resolve_legal_move, MoveList};
 pub use perft::{perft, perft_divide, PerftError};
 pub use position::{
     MoveError, PieceChange, Position, PositionInvariantError, Undo, UnmakeError, STARTPOS_FEN,
+};
+pub use search::{
+    search, search_controlled, ConfigError, DrawClaim, SearchAction, SearchConfig, SearchControl,
+    SearchResult, SearchStop,
 };
 pub use types::{CastlingRights, CastlingSide, Color, Move, MoveKind, Piece, Role, Square};

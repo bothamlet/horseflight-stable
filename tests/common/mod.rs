@@ -66,3 +66,75 @@ pub fn assert_valid(position: &Position) {
         position.to_fen()
     );
 }
+
+/// Vertically mirror `fen`: reverse the rank order and swap piece colours,
+/// producing the colour-swapped equivalent position used by symmetry tests.
+pub fn mirror_fen(fen: &str) -> String {
+    let fields: Vec<&str> = fen.split_whitespace().collect();
+    assert_eq!(fields.len(), 6, "FEN must have six fields: {fen}");
+    let placement: Vec<String> = fields[0]
+        .split('/')
+        .rev()
+        .map(|rank| {
+            rank.chars()
+                .map(|ch| {
+                    if ch.is_ascii_uppercase() {
+                        ch.to_ascii_lowercase()
+                    } else if ch.is_ascii_lowercase() {
+                        ch.to_ascii_uppercase()
+                    } else {
+                        ch
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let side = if fields[1] == "w" { "b" } else { "w" };
+    // White kingside becomes black kingside and vice versa.
+    let mut rights = [false; 4];
+    for ch in fields[2].chars() {
+        match ch {
+            'K' => rights[2] = true,
+            'Q' => rights[3] = true,
+            'k' => rights[0] = true,
+            'q' => rights[1] = true,
+            '-' => {}
+            other => panic!("unexpected castling character {other:?} in {fen}"),
+        }
+    }
+    let castling: String = ['K', 'Q', 'k', 'q']
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| rights[*index])
+        .map(|(_, ch)| ch)
+        .collect();
+    let castling = if castling.is_empty() {
+        "-".to_string()
+    } else {
+        castling
+    };
+    let ep = match fields[3] {
+        "-" => "-".to_string(),
+        square => {
+            let bytes = square.as_bytes();
+            let file = bytes[0] as char;
+            let rank = 9 - i32::from(bytes[1] - b'0');
+            format!("{file}{rank}")
+        }
+    };
+    format!(
+        "{} {side} {castling} {ep} {} {}",
+        placement.join("/"),
+        fields[4],
+        fields[5]
+    )
+}
+
+/// Play a coordinate move sequence from a FEN to build real game history.
+pub fn walk(fen: &str, moves: &[&str]) -> Game {
+    let mut game = game(fen);
+    for text in moves {
+        play_uci(&mut game, text);
+    }
+    game
+}

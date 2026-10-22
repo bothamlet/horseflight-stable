@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "web/server"]
+resolver = "2"
+
 [package]
 name = "horseflight"
 version = "0.1.0"
@@ -5,7 +9,7 @@ edition = "2021"
 # Inferred minimum: const mutable references in the Zobrist table generator.
 # Only stable Rust 1.96.0 has been installed/tested; 1.83 is metadata, not a tested claim.
 rust-version = "1.83"
-description = "Horseflight chess foundation: hybrid board state, legal move generation, FEN, hashing and game rules"
+description = "Horseflight: original chess foundations (board, legal moves, FEN, hashing, game rules), replaceable evaluation and alpha-beta search with bounded quiescence"
 publish = false
 
 [dependencies]
@@ -16,3 +20,7 @@ shakmaty = "0.27"
 [[bin]]
 name = "perft"
 path = "src/bin/perft.rs"
+
+[[bin]]
+name = "analyze"
+path = "src/bin/analyze.rs"
