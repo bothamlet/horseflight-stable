@@ -24,3 +24,7 @@ path = "src/bin/perft.rs"
 [[bin]]
 name = "analyze"
 path = "src/bin/analyze.rs"
+
+[[bin]]
+name = "uci"
+path = "src/bin/uci.rs"

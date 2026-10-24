@@ -5,3 +5,4 @@ __pycache__/
 /web/frontend/dist/
 /web/frontend/test-results/
 /web/frontend/playwright-report/
+bench/tools/

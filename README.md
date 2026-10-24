@@ -8,8 +8,10 @@ delivers an **accepted functional baseline** for local play and analysis with th
 **Mission 004 — Mock-inspired cockpit** is **accepted** after independent review and GPT's
 executable/visual checks: a square blue/cream board, player bars, real captures/PGN and confirmed
 Play resignation, with clocks, opening names and Stockfish comparison only as visibly inactive
-grey placeholders. There is no transposition table, UCI interface, neural network, tablebase, GPU
-work, parallel search, engine match or engine-strength/Elo claim.
+grey placeholders. There is no transposition table, neural network, tablebase, GPU
+work, parallel search or absolute or official rating claim. A bounded UCI match baseline and its
+relative analysis now exist in [`docs/baseline-001.md`](docs/baseline-001.md); that
+relative measurement is not an absolute, official, FIDE or CCRL rating.
 
 The earlier research portfolio remains in this repository as history and reference; it is
 not an architecture commitment and none of its experiments were run.
@@ -123,6 +125,29 @@ Evidence, exact commands, the engine-control API and remaining limits are in
 `docs/evidence/mission-003/` and `docs/evidence/mission-004/`; nothing is published. The cockpit is
 a testing baseline, not a strength claim.
 
+## Benchmark records
+
+New benchmark runs are recorded under [`bench/`](bench/) as write-once artifacts:
+an ordinary JSON config, a per-game CSV, a JSON summary and an integrity file,
+regenerated from the raw Fastchess PGNs. The historical runner
+(`bench/match.sh`) and analysis scripts are unchanged.
+
+```sh
+python3 -m bench.record verify --config bench/configs/baseline-001.json
+python3 -m bench.record verify --config bench/configs/book-001.json
+```
+
+Two records exist: `baseline-001` (preserved 100-game historical match, no book) and
+`book-001` (100-game book-enabled match whose raw batches and final derived analysis live
+outside this checkout under `../book-001/`, with absolute digest-pinned inputs).
+
+`verify` re-reads the preserved Baseline001 games, recomputes the record and
+byte-compares it; it does **not** rerun the match and makes no absolute rating
+claim. Process, branch and evidence rules are in
+[`docs/research-workflow.md`](docs/research-workflow.md); ownership and
+deliberately excluded tooling are in
+[`docs/technology-boundaries.md`](docs/technology-boundaries.md).
+
 ## Correctness and scope boundaries
 
 - Move generation is original; no external engine move-generation code is copied.
@@ -162,6 +187,9 @@ Human-readable checkpoints:
   in GPT's independent acceptance. Screenshots are under `docs/evidence/mission-004/`.
   Browser verification is Chrome-only; lower sidebar controls can require vertical scrolling
   at laptop heights. Clocks, opening names and Stockfish comparison remain disabled placeholders.
+- [`docs/baseline-001.md`](docs/baseline-001.md) — the completed 100-game Baseline001 match and
+  its relative-rating analysis, pending parent acceptance; this is not an absolute or
+  official Elo claim.
 
 Accepted Phase 1B verification summary (2026-10-22): `cargo fmt
 --check`, Clippy `-D warnings`, `cargo test` (115 passed, 2 labeled deep-perft tests ignored

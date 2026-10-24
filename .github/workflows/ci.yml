@@ -1,0 +1,74 @@
+# Routine checks only. The deep perft suite, --include-ignored runs, full
+# 100-game matches, browser/e2e runs, deployments and artifact uploads are
+# deliberately excluded: they are slow and need real hardware and local tools.
+# Only actions/checkout, actions/setup-node and actions/setup-python are used;
+# Rust comes from the stable toolchain preinstalled on hosted runners.
+name: CI
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+      - "lab/**"
+      - "exp/**"
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust format, lint and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust with rustfmt and clippy
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Default to stable
+        run: rustup default stable
+      - name: Format
+        run: cargo fmt --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+
+  cockpit:
+    name: Cockpit typecheck, unit tests and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+      - name: Install dependencies from the lockfile
+        run: npm --prefix web/frontend ci
+      - name: Unit tests
+        run: npm --prefix web/frontend test
+      - name: Typecheck and build
+        run: npm --prefix web/frontend run build
+
+  python:
+    name: Benchmark records and research validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Byte-compile the benchmark utilities
+        run: >-
+          python3 -m py_compile
+          bench/pgn_reader.py bench/record.py
+      - name: Verify the committed Baseline001 record against the raw PGNs
+        run: >-
+          python3 -m bench.record verify
+          --config bench/configs/baseline-001.json
+      - name: Benchmark utility tests
+        run: python3 -m unittest discover -s bench -t . -p 'test_*.py'
+      - name: Research validator
+        run: python3 scripts/validate_research.py
+      - name: Research validator tests
+        run: python3 -m unittest discover -s scripts -p 'test*.py'
