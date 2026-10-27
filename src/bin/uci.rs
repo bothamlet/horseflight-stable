@@ -1,7 +1,7 @@
 //! Minimal UCI adapter for benchmarking Horseflight.
 //!
 //! This binary is a protocol shell only: every move comes from the same
-//! [`horseflight::search`] call the cockpit uses, with the crate's default
+//! [`horseflight::search()`] call the cockpit uses, with the crate's default
 //! handcrafted evaluator and the documented ordering/quiescence settings. It
 //! adds no chess knowledge, opening book, tablebase or opponent-specific
 //! tuning. The only new logic is UCI plumbing and a clock-to-deadline

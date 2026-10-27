@@ -318,9 +318,9 @@ impl SearchControl {
 ///
 /// This entry point has no cancellation and is deterministic: adding
 /// [`search_controlled`] does not change its results.
-pub fn search(
+pub fn search<E: Evaluator + ?Sized>(
     game: &Game,
-    evaluator: &dyn Evaluator,
+    evaluator: &E,
     config: &SearchConfig,
 ) -> Result<SearchResult, ConfigError> {
     search_inner(game, evaluator, config, None)
@@ -335,18 +335,18 @@ pub fn search(
 /// with no score. Cancellation is polled before and inside root/intended-claim
 /// probes and at node boundaries, so a pre-cancelled search does not begin a
 /// costly claim scan. The caller's game is never mutated.
-pub fn search_controlled(
+pub fn search_controlled<E: Evaluator + ?Sized>(
     game: &Game,
-    evaluator: &dyn Evaluator,
+    evaluator: &E,
     config: &SearchConfig,
     control: &SearchControl,
 ) -> Result<SearchResult, ConfigError> {
     search_inner(game, evaluator, config, Some(control))
 }
 
-fn search_inner(
+fn search_inner<E: Evaluator + ?Sized>(
     game: &Game,
-    evaluator: &dyn Evaluator,
+    evaluator: &E,
     config: &SearchConfig,
     control: Option<&SearchControl>,
 ) -> Result<SearchResult, ConfigError> {
@@ -389,9 +389,9 @@ struct Iteration {
     pv: Vec<Move>,
 }
 
-struct Worker<'a> {
+struct Worker<'a, E: Evaluator + ?Sized> {
     game: Game,
-    evaluator: &'a dyn Evaluator,
+    evaluator: &'a E,
     config: SearchConfig,
     control: Option<&'a SearchControl>,
     nodes: u64,
@@ -400,7 +400,7 @@ struct Worker<'a> {
     pv: Vec<Vec<Move>>,
 }
 
-impl Worker<'_> {
+impl<E: Evaluator + ?Sized> Worker<'_, E> {
     fn run(&mut self) -> SearchResult {
         let started = Instant::now();
         let outcome = self.game.outcome();
@@ -1024,7 +1024,7 @@ mod tests {
         }
     }
 
-    fn make_worker(game: Game, evaluator: &'static dyn Evaluator) -> Worker<'static> {
+    fn make_worker<E: Evaluator + ?Sized>(game: Game, evaluator: &'static E) -> Worker<'static, E> {
         Worker {
             game,
             evaluator,

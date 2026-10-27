@@ -23,10 +23,16 @@
 //! interrupt a running search can pass a [`search::SearchControl`] to
 //! [`search::search_controlled`]; the token is standard-library-only, polled at
 //! node and claim-probe boundaries, and a never-cancelled token leaves
-//! [`search::search`] deterministic. [`Undo::piece_changes`]
-//! remains the interface a future incremental evaluator can consume; a future
-//! transposition table can key on [`Position::hash`], but draw-sensitive scores
-//! would also need the halfmove clock and path-dependent repetition context.
+//! [`search::search`] deterministic. Both search entry points are generic over
+//! `E: Evaluator + ?Sized`, so a concrete evaluator avoids mandatory dynamic
+//! dispatch while `&dyn Evaluator` callers keep working unchanged.
+//! [`eval::features`] fixes the versioned 768-input binary piece-square schema
+//! a future neural evaluator will consume, with allocation-free extraction and
+//! delta updates. It is a boundary, not an implemented model.
+//! [`Undo::piece_changes`] remains the interface a future incremental evaluator
+//! can consume; a future transposition table can key on [`Position::hash`], but
+//! draw-sensitive scores would also need the halfmove clock and path-dependent
+//! repetition context.
 //!
 //! # Hashes versus repetition identity
 //!

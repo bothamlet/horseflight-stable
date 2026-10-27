@@ -8,7 +8,9 @@ delivers an **accepted functional baseline** for local play and analysis with th
 **Mission 004 — Mock-inspired cockpit** is **accepted** after independent review and GPT's
 executable/visual checks: a square blue/cream board, player bars, real captures/PGN and confirmed
 Play resignation, with clocks, opening names and Stockfish comparison only as visibly inactive
-grey placeholders. There is no transposition table, neural network, tablebase, GPU
+grey placeholders. The cockpit frontend, server and launcher are no longer part of the tracked
+checkout: they are absent from fresh clones, and any retained copy is a git-ignored local file in
+a clone that already has one. There is no transposition table, neural network, tablebase, GPU
 work, parallel search or absolute or official rating claim. A bounded UCI match baseline and its
 relative analysis now exist in [`docs/baseline-001.md`](docs/baseline-001.md); that
 relative measurement is not an absolute, official, FIDE or CCRL rating.
@@ -28,18 +30,19 @@ A dependency-free Rust library plus a small development CLI:
 | Evaluator seam | Fixed-size before/after piece deltas for ordinary moves, captures, en passant, castling and promotions |
 | Hashing | Deterministic SplitMix64-seeded Zobrist; incremental update and independent full recomputation; legal-EP-only repetition identity |
 | Rules | FEN parsing/serialization, checkmate, stalemate, conservative insufficient material, threefold/fifty-move claims, automatic fivefold/seventy-five-move draws, mate precedence |
-| Evaluation | Replaceable `Evaluator` trait; original material plus pawn-advancement and minor-centralisation terms; material-only baseline; clamped score bands separating evaluation, mate and infinity |
+| Evaluation | Replaceable `Evaluator` trait; original material plus pawn-advancement and minor-centralisation terms in `eval::classical`; material-only baseline; clamped score bands separating evaluation, mate and infinity |
+| Neural boundary | Versioned 768-input binary piece-square schema v1 in `eval::features`, allocation-free extraction and delta updates; documented logical artifact contract and N2 integration plan in [`docs/neural-evaluation.md`](docs/neural-evaluation.md). No model or inference is implemented. |
 | Search | Iterative-deepening full-window negamax alpha-beta; previous-PV and MVV/LVA ordering; bounded quiescence with all check evasions and quiet promotions; deterministic node budgets and truthful stop/claim/terminal reporting |
 | Analysis CLI | `analyze` reports action, claim, score, completed depth, legal PV, main/quiescence nodes, stop reason, time and NPS, with depth/limit/FEN/move-history and ordering/quiescence toggles |
 | Verification | Perft/divide, focused unit and integration tests, an independent development-only `shakmaty` comparison, an independent unpruned negamax reference and bounded exhaustive mate proofs |
 | Cooperative cancellation | Standard-library `SearchControl`; `search_controlled` polls at node and claim-probe boundaries and reports `SearchStop::Cancelled`; plain `search` is unchanged and deterministic |
-| Cockpit (Mission 003) | `web/server` Axum adapter and React/TypeScript/Vite presentation: local-only loopback host, server-authoritative legal moves/SAN/history/claims/search, play/analysis, guarded one-worker engine jobs, FEN/navigation/branching and manual annotations |
+| Cockpit (Mission 003; retained local only) | Git-ignored `web/server` Axum adapter and React/TypeScript/Vite presentation that may be retained in existing local checkouts: local-only loopback host, server-authoritative legal moves/SAN/history/claims/search, play/analysis, guarded one-worker engine jobs, FEN/navigation/branching and manual annotations. Not tracked, not built by CI and absent from fresh clones |
 | Future boundary | `Position` + `Undo` still expose evaluator deltas; a full interface protocol, persistent database or strength programme is not implemented |
 
 ## Quick start
 
 ```sh
-# Workspace-wide: core library plus the cockpit server crate.
+# Engine workspace (the only tracked crate).
 cargo test --workspace
 cargo test --workspace --release -- --include-ignored
 cargo clippy --workspace --all-targets -- -D warnings
@@ -78,13 +81,22 @@ quiescence/main node counts, the stop reason, elapsed time and NPS; invalid opti
 moves or limits exit nonzero. Scores are clamped so a custom evaluator cannot forge a mate,
 node budgets are hard aggregate limits, and the caller's position/history are never mutated.
 
-## Local cockpit (Mission 003)
+## Local cockpit (retained, untracked)
 
-The cockpit is a separate workspace member. The core library still has an empty normal
-dependency list; `horseflight-cockpit` adds the local HTTP/UI dependencies.
+The Mission 003/004 cockpit is not part of the tracked checkout. Its `web/` frontend and server,
+plus the `scripts/run-cockpit.sh` launcher, are git-ignored, retained only in checkouts that
+already have them, and absent from fresh clones. CI does not install Node or build them. The core
+library still has an empty normal dependency list; the retained server keeps its HTTP/UI
+dependencies in `web/server/Cargo.toml` and remains an independently buildable crate through an
+explicit `--manifest-path`.
+
+Preservation is verified only in this checkout. In any other clone, back up `web/` and
+`scripts/run-cockpit.sh` before pulling or checking out this removal: a normal Git update can
+delete files that were formerly tracked, and `.gitignore` is not a backup.
 
 ```sh
-# One-time frontend dependency installation (committed lockfile)
+# Only where the ignored cockpit files are retained locally.
+# One-time frontend dependency installation (retained local lockfile)
 npm --prefix web/frontend ci
 
 # One-command local launch after installation: builds frontend + server, then serves
@@ -97,17 +109,19 @@ npm --prefix web/frontend ci
 no public bind, authentication, telemetry, remote asset, cloud service or production chess.js /
 Stockfish dependency. FEN parsing remains structural rather than a reachability proof.
 
-The browser presents server-approved state only. Horseflight is the sole authority for legal
-destinations, move application, SAN, timeline/history, captures, PGN outcomes and claims; React
-Chessboard is presentation and dnd-kit, not a rules engine. Manual arrows and square highlights are
-local presentation and never change the revision or game. The Mission 004 sidebar adds real PGN
-copy, backend-derived capture indicators and a confirmed, revision-guarded Play resignation while
-preserving FEN/history/settings/annotations/search controls in accessible panels. Clocks, opening
-names and Stockfish/Difference are inactive grey placeholders, not integrations.
+When present locally, the browser presents server-approved state only. Horseflight is the sole
+authority for legal destinations, move application, SAN, timeline/history, captures, PGN outcomes
+and claims; React Chessboard is presentation and dnd-kit, not a rules engine. Manual arrows and
+square highlights are local presentation and never change the revision or game. The Mission 004
+sidebar adds real PGN copy, backend-derived capture indicators and a confirmed, revision-guarded
+Play resignation while preserving FEN/history/settings/annotations/search controls in accessible
+panels. Clocks, opening names and Stockfish/Difference are inactive grey placeholders, not
+integrations.
 
 ```sh
-# Frontend checks and real-browser tests. The e2e script rebuilds the frontend and release
-# server first, then starts the real backend; Chrome is /usr/bin/google-chrome.
+# Retained-local frontend checks and real-browser tests, only where the ignored files exist.
+# The e2e script rebuilds the frontend and release server from the explicit server manifest,
+# then starts the real backend; Chrome is /usr/bin/google-chrome. CI does not run these.
 npm --prefix web/frontend test
 npm --prefix web/frontend run build
 npm --prefix web/frontend run e2e
@@ -119,11 +133,11 @@ python3 scripts/validate_research.py
 python3 -m unittest discover -s scripts -p 'test*.py'
 ```
 
-Evidence, exact commands, the engine-control API and remaining limits are in
+Historical evidence, exact commands, the engine-control API and remaining limits are archived in
 [`docs/mission-003.md`](docs/mission-003.md); the Mission 004 implementation checkpoint is in
-[`docs/mission-004.md`](docs/mission-004.md). Screenshots are local files under
-`docs/evidence/mission-003/` and `docs/evidence/mission-004/`; nothing is published. The cockpit is
-a testing baseline, not a strength claim.
+[`docs/mission-004.md`](docs/mission-004.md). Screenshots under `docs/evidence/mission-003/` and
+`docs/evidence/mission-004/` are tracked historical evidence, not current verification. The
+cockpit is a historical testing baseline, not a strength claim.
 
 ## Benchmark records
 
@@ -135,23 +149,38 @@ regenerated from the raw Fastchess PGNs. The historical runner
 ```sh
 python3 -m bench.record verify --config bench/configs/baseline-001.json
 python3 -m bench.record verify --config bench/configs/book-001.json
+python3 -m bench.record_v2 verify --config bench/configs/baseline-001-v2-binding.json
+python3 -m bench.build_manifest verify \
+  --manifest bench/builds/n1-0906016-analyze-default.json
+python3 -m bench.build_manifest verify \
+  --manifest bench/builds/n1-0906016-analyze-depth3.json
+python3 -m bench.build_manifest verify \
+  --manifest bench/builds/n1-0906016-uci.json
 ```
 
-Two records exist: `baseline-001` (preserved 100-game historical match, no book) and
+Two v1 records exist: `baseline-001` (preserved 100-game historical match, no book) and
 `book-001` (100-game book-enabled match whose raw batches and final derived analysis live
-outside this checkout under `../book-001/`, with absolute digest-pinned inputs).
+outside this checkout under `../book-001/`, with absolute digest-pinned inputs). The v2
+`baseline-001-v2-binding` record imports one preserved Baseline001 batch to demonstrate
+build/experiment binding; it is not a new match. Version 2 keeps v1 bytes unchanged.
+`bench/builds/observations.json` links real analyze/UCI subprocess output to the
+manifest build IDs; it is evidence, not a tournament.
 
 `verify` re-reads the preserved Baseline001 games, recomputes the record and
 byte-compares it; it does **not** rerun the match and makes no absolute rating
 claim. Process, branch and evidence rules are in
 [`docs/research-workflow.md`](docs/research-workflow.md); ownership and
 deliberately excluded tooling are in
-[`docs/technology-boundaries.md`](docs/technology-boundaries.md).
+[`docs/technology-boundaries.md`](docs/technology-boundaries.md). Capability
+history and lifecycle status are in [`docs/technology-tree.md`](docs/technology-tree.md);
+release/build/experiment identities and the contributor workflow are in
+[`docs/versioning.md`](docs/versioning.md).
 
 ## Correctness and scope boundaries
 
 - Move generation is original; no external engine move-generation code is copied.
-- Core engine production dependencies: none; the separate cockpit has web/UI dependencies.
+- Core engine production dependencies: none. The retained-local cockpit, when present, keeps its
+  own web/UI dependencies outside the tracked workspace.
   `shakmaty` is in `[dev-dependencies]` only, for
   independent reference tests; it is not linked into the library or CLI.
 - FEN validates structure and basic invariants, not full reachability. It preserves a
@@ -174,19 +203,28 @@ Human-readable checkpoints:
 - [`docs/phase-1a-foundations.md`](docs/phase-1a-foundations.md) — the accepted Phase 1A
   snapshot: format, Clippy, debug/release tests, deep perft, the seeded `shakmaty` reference
   comparison, research validation and local perft CLI samples. Its evidence is unchanged.
+- [`docs/neural-evaluation.md`](docs/neural-evaluation.md) — Mission N1 schema v1,
+  artifact contract and the exact N2 encoder/inference/push-pop boundary. Interface only;
+  no model, weights or inference exist.
+- [`docs/technology-tree.md`](docs/technology-tree.md) — stable CORE/SEARCH/EVAL IDs,
+  introduction commits, dependencies, tests and honest lifecycle status (integrated,
+  measured-not-adopted, experimental-unmerged or planned).
+- [`docs/versioning.md`](docs/versioning.md) — source revision vs engine release vs build
+  identity vs experiment; SemVer tag policy, build-manifest rules and contributor workflow.
 - [`docs/phase-1b-first-thought.md`](docs/phase-1b-first-thought.md) — Phase 1B evaluation,
   search, draw policy, approximations, the current gate results, and the fixed-depth/fixed-node
   ordering and quiescence ablations with actual node counts and timings.
-- [`docs/mission-003.md`](docs/mission-003.md) — the accepted cockpit baseline and latest
-  workspace checks: 148 debug tests passed (2 deep tests ignored), all 150 release tests passed,
-  17 frontend unit tests and 9 real-browser tests passed against the actual engine. Formatting,
-  Clippy, docs, research validation, launch and the overflow regression also passed. At that
-  checkpoint, visual polish and richer cancelled-result presentation were deferred.
-- [`docs/mission-004.md`](docs/mission-004.md) — the accepted mock-inspired cockpit: 161 debug
-  tests (2 ignored), 163 release tests, 20 frontend unit tests and 15 real-browser tests passed
-  in GPT's independent acceptance. Screenshots are under `docs/evidence/mission-004/`.
-  Browser verification is Chrome-only; lower sidebar controls can require vertical scrolling
-  at laptop heights. Clocks, opening names and Stockfish comparison remain disabled placeholders.
+- [`docs/mission-003.md`](docs/mission-003.md) — the historical accepted cockpit baseline and
+  archived workspace checks: 148 debug tests passed (2 deep tests ignored), all 150 release tests
+  passed, 17 frontend unit tests and 9 real-browser tests passed against the actual engine.
+  Formatting, Clippy, docs, research validation, launch and the overflow regression also passed.
+  Those counts describe the archived cockpit checkpoint, not the current engine-only checkout.
+- [`docs/mission-004.md`](docs/mission-004.md) — the historical accepted mock-inspired cockpit:
+  161 debug tests (2 ignored), 163 release tests, 20 frontend unit tests and 15 real-browser tests
+  passed in GPT's independent acceptance. Those counts include the now-untracked cockpit and are
+  archived, not current. Screenshots are under `docs/evidence/mission-004/`. Browser verification
+  was Chrome-only; lower sidebar controls can require vertical scrolling at laptop heights.
+  Clocks, opening names and Stockfish comparison remain disabled placeholders.
 - [`docs/baseline-001.md`](docs/baseline-001.md) — the completed 100-game Baseline001 match and
   its relative-rating analysis, pending parent acceptance; this is not an absolute or
   official Elo claim.

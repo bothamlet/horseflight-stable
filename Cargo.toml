@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "web/server"]
+exclude = ["web/server"]
 resolver = "2"
 
 [package]

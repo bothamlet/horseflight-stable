@@ -1,8 +1,8 @@
 # Routine checks only. The deep perft suite, --include-ignored runs, full
 # 100-game matches, browser/e2e runs, deployments and artifact uploads are
 # deliberately excluded: they are slow and need real hardware and local tools.
-# Only actions/checkout, actions/setup-node and actions/setup-python are used;
-# Rust comes from the stable toolchain preinstalled on hosted runners.
+# Only actions/checkout and actions/setup-python are used; Rust comes from the
+# stable toolchain preinstalled on hosted runners.
 name: CI
 
 "on":
@@ -33,23 +33,6 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-  cockpit:
-    name: Cockpit typecheck, unit tests and build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: web/frontend/package-lock.json
-      - name: Install dependencies from the lockfile
-        run: npm --prefix web/frontend ci
-      - name: Unit tests
-        run: npm --prefix web/frontend test
-      - name: Typecheck and build
-        run: npm --prefix web/frontend run build
-
   python:
     name: Benchmark records and research validation
     runs-on: ubuntu-latest
@@ -61,11 +44,28 @@ jobs:
       - name: Byte-compile the benchmark utilities
         run: >-
           python3 -m py_compile
-          bench/pgn_reader.py bench/record.py
+          bench/pgn_reader.py bench/record.py bench/build_manifest.py
+          bench/record_v2.py
       - name: Verify the committed Baseline001 record against the raw PGNs
         run: >-
           python3 -m bench.record verify
           --config bench/configs/baseline-001.json
+      - name: Verify the version 2 binding record
+        run: >-
+          python3 -m bench.record_v2 verify
+          --config bench/configs/baseline-001-v2-binding.json
+      - name: Verify the example build manifests
+        run: |
+          python3 -m bench.build_manifest verify \
+            --manifest bench/builds/n1-0906016-analyze-default.json
+          python3 -m bench.build_manifest verify \
+            --manifest bench/builds/n1-0906016-analyze-no-ordering.json
+          python3 -m bench.build_manifest verify \
+            --manifest bench/builds/n1-0906016-analyze-depth3.json
+          python3 -m bench.build_manifest verify \
+            --manifest bench/builds/n1-0906016-uci.json
+      - name: Verify committed runtime evidence hashes
+        run: sha256sum -c bench/builds/evidence/SHA256SUMS
       - name: Benchmark utility tests
         run: python3 -m unittest discover -s bench -t . -p 'test_*.py'
       - name: Research validator
