@@ -2,7 +2,7 @@
 name = "horseflight"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.85"
 description = "UCI chess engine with alpha-beta search and optional NNUE evaluation"
 publish = false
 

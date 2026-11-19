@@ -112,6 +112,26 @@ impl Uci {
         (chosen, started.elapsed())
     }
 
+    fn no_bestmove_window(&mut self, duration: Duration) {
+        let deadline = Instant::now() + duration;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return;
+            }
+            match self.lines.recv_timeout(remaining) {
+                Ok(line) => {
+                    self.seen.push(line.clone());
+                    assert!(!line.starts_with("bestmove "), "unexpected {line}");
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => return,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("UCI disconnected: {:?}", self.seen)
+                }
+            }
+        }
+    }
+
     fn close_stdin(&mut self) {
         self.stdin.take();
     }
@@ -666,4 +686,224 @@ fn malformed_positions_are_rejected_and_keep_previous_state() {
     assert_legal(&expected, &chosen);
 
     assert!(uci.quit().success());
+}
+
+#[test]
+fn draw_claim_recommendations_are_not_reported_as_fallback_scores() {
+    let start = "7k/8/8/8/8/8/8/K1Q5 w - - 0 1";
+    let moves = ["a1a2", "h8g8", "a2a1", "g8h8", "a1a2", "h8g8", "a2a1"];
+    let mut intended = Game::from_fen(start).unwrap();
+    for movement in moves {
+        apply(&mut intended, movement);
+    }
+    let mut uci = Uci::spawn();
+    let before = uci.seen.len();
+    let (chosen, _) = uci.search(&[
+        "position fen 7k/8/8/8/8/8/8/K1Q5 w - - 0 1 moves a1a2 h8g8 a2a1 g8h8 a1a2 h8g8 a2a1",
+        "go depth 3",
+    ]);
+    let lines = &uci.seen[before..];
+    assert_legal(&intended, &chosen);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("draw claim recommended")
+                && line.contains("g8h8")
+                && line.contains("controller")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("unsearched")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains(" score ") && !line.contains(" pv ")),
+        "{lines:?}"
+    );
+
+    let mut current = Game::from_fen("7k/8/8/8/8/8/8/K1Q5 b - - 0 1").unwrap();
+    for movement in [
+        "h8g8", "a1a2", "g8h8", "a2a1", "h8g8", "a1a2", "g8h8", "a2a1",
+    ] {
+        apply(&mut current, movement);
+    }
+    assert!(current.claimable_now().any());
+    let before = uci.seen.len();
+    let (chosen, _) = uci.search(&[
+        "position fen 7k/8/8/8/8/8/8/K1Q5 b - - 0 1 moves h8g8 a1a2 g8h8 a2a1 h8g8 a1a2 g8h8 a2a1",
+        "go depth 3 searchmoves h8h7",
+    ]);
+    let lines = &uci.seen[before..];
+    assert_eq!(chosen, "h8h7");
+    assert_legal(&current, &chosen);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("draw claim recommended")
+                && line.contains("current")
+                && line.contains("controller")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("unsearched")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains(" score ") && !line.contains(" pv ")),
+        "{lines:?}"
+    );
+    apply(&mut current, &chosen);
+    assert!(
+        !current.claimable_now().any(),
+        "playing the fallback loses the current claim"
+    );
+    assert!(uci.quit().success());
+}
+
+#[test]
+fn retained_terminal_and_completed_ponder_wait_for_release() {
+    let mut uci = Uci::spawn();
+    uci.send_all(&[
+        "position fen 7k/6Q1/6K1/8/8/8/8/8 b - - 0 1",
+        "go infinite",
+        "isready",
+    ]);
+    uci.wait_for("readyok", OUTPUT_TIMEOUT);
+    assert!(!uci.seen.iter().any(|line| line.starts_with("bestmove ")));
+    uci.no_bestmove_window(Duration::from_millis(300));
+    uci.send("stop");
+    assert_eq!(uci.wait_for("bestmove ", OUTPUT_TIMEOUT), "bestmove 0000");
+    let mark = uci.mark();
+    uci.send_all(&["position startpos", "go ponder depth 1", "isready"]);
+    uci.wait_for("readyok", OUTPUT_TIMEOUT);
+    assert!(!uci.seen[mark..]
+        .iter()
+        .any(|line| line.starts_with("bestmove ")));
+    uci.no_bestmove_window(Duration::from_millis(300));
+    uci.send("ponderhit");
+    uci.wait_for("bestmove ", OUTPUT_TIMEOUT);
+    uci.no_bestmove_window(Duration::from_millis(200));
+    uci.send("isready");
+    uci.wait_for("readyok", OUTPUT_TIMEOUT);
+    assert_eq!(
+        uci.seen[mark..]
+            .iter()
+            .filter(|line| line.starts_with("bestmove "))
+            .count(),
+        1
+    );
+    assert!(uci.quit().success());
+}
+
+#[test]
+fn mate_diagnostic_and_nnue_root_restriction() {
+    let mut uci = Uci::spawn();
+    uci.send_all(&[
+        "setoption name Eval value nnue",
+        "position startpos",
+        "go mate 1 depth 1 searchmoves a2a3",
+    ]);
+    let diagnostic = uci.wait_for("info string go mate", OUTPUT_TIMEOUT);
+    assert!(diagnostic.contains("unsupported"));
+    assert_eq!(uci.wait_for("bestmove ", OUTPUT_TIMEOUT), "bestmove a2a3");
+    assert!(uci.quit().success());
+}
+
+#[test]
+fn restricted_special_moves_and_f06_intended_claim() {
+    let mut uci = Uci::spawn();
+    for (fen, movement) in [
+        ("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", "e1g1"),
+        ("8/P7/8/8/8/8/8/K6k w - - 0 1", "a7a8q"),
+        ("8/P7/8/8/8/8/8/K6k w - - 0 1", "a7a8n"),
+        ("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1", "e5d6"),
+    ] {
+        for eval in ["classical", "nnue"] {
+            let option = format!("setoption name Eval value {eval}");
+            let position = format!("position fen {fen}");
+            let go = format!("go depth 1 searchmoves {movement}");
+            assert_eq!(uci.search(&[&option, &position, &go]).0, movement);
+        }
+    }
+    let position =
+        "position fen 7k/8/8/8/8/8/8/K1Q5 w - - 0 1 moves a1a2 h8g8 a2a1 g8h8 a1a2 h8g8 a2a1";
+    for (movement, claim) in [("g8h8", true), ("g8h7", false)] {
+        let mark = uci.mark();
+        let go = format!("go depth 2 searchmoves {movement}");
+        assert_eq!(uci.search(&[position, &go]).0, movement);
+        assert_eq!(
+            uci.seen[mark..]
+                .iter()
+                .any(|line| line.contains("draw claim recommended")),
+            claim
+        );
+    }
+    assert!(uci.quit().success());
+}
+
+#[test]
+fn live_ponder_hit_starts_fresh_movetime() {
+    let mut uci = Uci::spawn();
+    uci.send_all(&["position startpos", "go ponder movetime 200", "isready"]);
+    uci.wait_for("readyok", OUTPUT_TIMEOUT);
+    uci.no_bestmove_window(Duration::from_millis(400));
+    let started = Instant::now();
+    uci.send("ponderhit");
+    uci.wait_for("bestmove ", OUTPUT_TIMEOUT);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(100) && elapsed < Duration::from_secs(3),
+        "{elapsed:?}"
+    );
+    uci.no_bestmove_window(Duration::from_millis(200));
+    assert!(uci.quit().success());
+}
+
+#[test]
+fn held_result_replacement_and_exit_cleanup() {
+    let mut uci = Uci::spawn();
+    uci.send_all(&["position startpos", "go ponder depth 1", "isready"]);
+    uci.wait_for("readyok", OUTPUT_TIMEOUT);
+    uci.no_bestmove_window(Duration::from_millis(300));
+    uci.send_all(&["position startpos moves e2e4", "isready"]);
+    uci.wait_for("readyok", OUTPUT_TIMEOUT);
+    uci.no_bestmove_window(Duration::from_millis(200));
+    let mark = uci.mark();
+    let (chosen, _) = uci.search(&["go depth 1 searchmoves a7a6"]);
+    assert_eq!(chosen, "a7a6");
+    uci.no_bestmove_window(Duration::from_millis(200));
+    assert_eq!(
+        uci.seen[mark..]
+            .iter()
+            .filter(|l| l.starts_with("bestmove "))
+            .count(),
+        1
+    );
+    assert!(uci.quit().success());
+
+    for quit in [true, false] {
+        let mut uci = Uci::spawn();
+        uci.send_all(&["position startpos", "go ponder depth 1", "isready"]);
+        uci.wait_for("readyok", OUTPUT_TIMEOUT);
+        uci.no_bestmove_window(Duration::from_millis(300));
+        if quit {
+            uci.send("quit");
+        }
+        uci.close_stdin();
+        assert!(uci.wait_exit(EXIT_TIMEOUT).success());
+        while let Ok(line) = uci.lines.try_recv() {
+            uci.seen.push(line);
+        }
+        assert!(
+            uci.seen
+                .iter()
+                .filter(|l| l.starts_with("bestmove "))
+                .count()
+                <= 1
+        );
+    }
 }

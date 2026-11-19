@@ -1,15 +1,12 @@
-//! N2-002 absolute-white 781→256→32→1 integer neural evaluator.
+//! Integer NNUE evaluator with a 781 → 256 → 32 → 1 architecture.
 //!
-//! This module is the runtime half of Milestone A: it embeds the portable
-//! asset produced by `scripts/convert_n2_002.py`, validates it once, exposes
-//! exact integer inference and a reversible accumulator for the 781-input
-//! schema, and provides a stateless [`N2Evaluator`] reference path. Search and
-//! UCI only reach it through the opt-in incremental [`session::Session`].
+//! The model is embedded and validated once. [`N2Evaluator`] rebuilds the
+//! accumulator for reference; UCI search uses the incremental [`session::Session`].
 //!
 //! # Input schema
 //!
 //! The schema is *not* [`crate::eval::features`] schema v1 (768 binary
-//! piece-square inputs). N2-002 is a fixed 781-input absolute-white encoding:
+//! piece-square inputs). This model uses 781 inputs with fixed color indices:
 //!
 //! ```text
 //! index = ((color_offset + role) * 64) + square
@@ -110,7 +107,7 @@ pub const EP_FEATURE_BASE: usize = 773;
 /// The supplied metadata's score-perspective string, preserved verbatim.
 pub const METADATA_SCORE_PERSPECTIVE: &str = "white_relative_pending_provenance_verification";
 /// Derived interpretation recorded separately from the supplied metadata.
-pub const DERIVED_SCORE_PERSPECTIVE: &str = "derived: white-relative (unverified origin)";
+pub const DERIVED_SCORE_PERSPECTIVE: &str = "derived: white-relative";
 
 /// Fixed tensor order and byte lengths used by the container.
 const W1_LEN: usize = INPUT_FEATURES * ACCUMULATOR_SIZE;
@@ -366,7 +363,7 @@ impl Model {
     }
 }
 
-/// Validate an arbitrary byte buffer against the N2-002 container contract.
+/// Validate a model buffer against the embedded NNUE format.
 ///
 /// This performs exactly the same checks as the one-time embedded-asset
 /// validation and returns only header metadata, so tests and tooling can feed
@@ -386,7 +383,7 @@ static MODEL: OnceLock<Model> = OnceLock::new();
 pub fn model() -> &'static Model {
     MODEL.get_or_init(|| {
         Model::parse(ASSET_BYTES)
-            .unwrap_or_else(|error| panic!("embedded N2-002 asset failed validation: {error}"))
+            .unwrap_or_else(|error| panic!("embedded NNUE weights failed validation: {error}"))
     })
 }
 
@@ -781,8 +778,8 @@ pub fn forward(accumulator: &Accumulator) -> i32 {
 ///
 /// This path allocates nothing but recomputes the whole accumulator on every
 /// call. It converts the White-relative output to side-to-move centipawns
-/// (negated for Black) and clamps with [`clamp_evaluation`]. Search does not use
-/// it; Milestone B adds the incremental session.
+/// (negated for Black) and clamps with [`clamp_evaluation`]. Search uses the
+/// incremental session instead.
 pub struct N2Evaluator;
 
 impl Evaluator for N2Evaluator {
@@ -971,10 +968,7 @@ mod tests {
         assert_eq!(meta.provenance_flags, 0);
         assert_eq!(provenance_flags(), 0);
         assert_eq!(score_perspective(), METADATA_SCORE_PERSPECTIVE);
-        assert_eq!(
-            DERIVED_SCORE_PERSPECTIVE,
-            "derived: white-relative (unverified origin)"
-        );
+        assert_eq!(DERIVED_SCORE_PERSPECTIVE, "derived: white-relative");
         assert_eq!(
             weights_sha256(),
             "8dcb4f2908c37cb7ce800eb3e6d170aedeb7a5ab89f2b41d2c57e32340454250"

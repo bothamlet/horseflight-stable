@@ -1,4 +1,4 @@
-//! Phase A1 stage timings for the N2-002 evaluation path.
+//! Timings for individual stages of NNUE evaluation.
 //!
 //! Requires the profile-only scaffolding, so it only builds with the feature
 //! and is `#[ignore]`d as a measurement rather than an assertion:

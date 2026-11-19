@@ -4,7 +4,7 @@ Horseflight is a Rust chess engine with a UCI interface and command-line tools f
 
 ## Run
 
-With stable Rust:
+With Rust 1.85 or newer:
 
 ```sh
 cargo build --release --locked
@@ -12,7 +12,7 @@ cargo build --release --locked
 ./target/release/perft --divide 4
 ```
 
-Add `target/release/uci` as an engine in a UCI-compatible chess GUI. To try NNUE directly, run that binary and enter:
+Add `target/release/uci` to a UCI-compatible chess GUI. Classical evaluation is the default; select `nnue` under the engine’s `Eval` option to try the neural evaluator. You can also run the binary directly:
 
 ```text
 uci
@@ -30,7 +30,7 @@ Wait for `bestmove`, then send `quit` to exit.
 - **Search:** Iterative-deepening negamax with alpha-beta pruning, move ordering, bounded quiescence, and depth, node, and clock limits.
 - **Evaluation:** A handcrafted evaluator and an opt-in 781 → 256 → 32 → 1 integer NNUE. The neural accumulator updates on make/unmake; AVX2 is detected at runtime with a scalar fallback. The Rust engine has no runtime crate dependencies.
 
-The embedded **N2-002** weights were trained on the [Lichess Open Database](https://database.lichess.org/). The [N2-006 notebook](training/n2-006.ipynb) documents a later experiment: profiling GPU throughput, narrowing a hyperparameter sweep, and testing mirror augmentation. It does not produce the bundled N2-002 weights.
+The bundled weights were trained on the [Lichess Open Database](https://database.lichess.org/). The [training notebook](training/nnue-training.ipynb) documents a separate experiment on GPU throughput, hyperparameter tuning, and mirror augmentation. It does not reproduce the bundled weights.
 
 ## Verify
 

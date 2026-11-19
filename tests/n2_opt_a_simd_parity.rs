@@ -1,4 +1,4 @@
-//! Phase A2 parity tests for the dispatched N2-002 head.
+//! Exact agreement between scalar and AVX2 inference.
 //!
 //! The scalar [`forward_trace`] is the independent arithmetic oracle: it keeps
 //! the original `i32` loops and the asset's `i8`/`i16` tensor types. Every test

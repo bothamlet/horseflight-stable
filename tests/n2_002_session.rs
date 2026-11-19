@@ -1,6 +1,6 @@
-//! Milestone B: reversible evaluation-session lifecycle in search.
+//! Reversible NNUE accumulation during search.
 //!
-//! These tests prove the incremental N2-002 session is exactly interchangeable
+//! These tests prove the incremental NNUE session is exactly interchangeable
 //! with the stateless reference evaluator, that it is balanced after every
 //! search termination reason (completed, node limit, cancellation, claim
 //! probe), that the caller's game is untouched, and that nested make/unmake

@@ -1,9 +1,9 @@
-//! Dispatched SIMD kernels for the N2-002 integer head.
+//! Runtime-dispatched SIMD kernels for the NNUE hidden and output layers.
 //!
 //! The crate keeps `#![deny(unsafe_code)]`; this module is the only place that
 //! opts out, because Rust's `std::arch` intrinsics are `unsafe` by
 //! construction. Every `unsafe` block here is a fixed-width kernel over slices
-//! whose lengths are compile-time constants of the N2-002 contract
+//! whose lengths are fixed by the model architecture
 //! ([`ACCUMULATOR_SIZE`] = 256, [`HIDDEN_SIZE`] = 32), so no kernel depends on
 //! caller-provided lengths.
 //!

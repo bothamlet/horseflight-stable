@@ -1,7 +1,7 @@
 //! Minimal UCI adapter for benchmarking Horseflight.
 //!
 //! The `Eval` option selects the classical evaluator (default) or the embedded
-//! N2-002 NNUE with incremental accumulation. This adapter translates UCI
+//! NNUE with incremental accumulation. This adapter translates UCI
 //! commands and clock limits into engine search requests.
 //!
 //! Time management is deliberately simple and conservative: a fraction of the
@@ -11,13 +11,17 @@
 
 use std::io::{self, BufRead, Write};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use horseflight::eval::mate_distance_plies;
 use horseflight::eval::n2::session::Session;
 use horseflight::eval::n2::{self, N2Evaluator};
-use horseflight::search::search_controlled_with_session;
+use horseflight::search::{
+    search_controlled_restricted, search_controlled_with_session,
+    search_controlled_with_session_restricted,
+};
 use horseflight::{
     search_controlled, Game, HandcraftedEvaluator, Move, Role, SearchAction, SearchConfig,
     SearchControl, SearchResult, Square,
@@ -58,9 +62,8 @@ fn main() {
                 out(&format!("id author {ENGINE_AUTHOR}"));
                 out("option name Eval type combo default classical var classical var nnue");
                 out(&format!(
-                    "info string n2 model={} asset_sha256={} perspective={} \
+                    "info string model=horseflight-nnue asset_sha256={} perspective={} \
                      training_data=lichess-open-database",
-                    n2::MODEL_ID,
                     n2::asset_sha256(),
                     n2::DERIVED_SCORE_PERSPECTIVE
                 ));
@@ -86,9 +89,8 @@ fn main() {
                                     out("info string Eval=classical");
                                 }
                                 EvaluatorChoice::Nnue => out(&format!(
-                                    "info string Eval=nnue model={} asset_sha256={} \
+                                    "info string Eval=nnue model=horseflight-nnue asset_sha256={} \
                                      perspective={} training_data=lichess-open-database",
-                                    n2::MODEL_ID,
                                     n2::asset_sha256(),
                                     n2::DERIVED_SCORE_PERSPECTIVE
                                 )),
@@ -124,11 +126,29 @@ fn main() {
             },
             "go" => {
                 stop_search(&mut active);
-                let limits = parse_go(tokens.collect::<Vec<_>>());
+                let mut limits = parse_go(tokens.collect::<Vec<_>>());
+                if let Some(requested) = limits.searchmoves.take() {
+                    let mut moves = Vec::new();
+                    for token in requested {
+                        if let Some(movement) = find_legal_move(&game, &token) {
+                            moves.push(movement);
+                        } else {
+                            out(&format!("info string illegal searchmove {token:?}"));
+                        }
+                    }
+                    limits.root_moves = Some(moves);
+                }
+                if limits.mate {
+                    out("info string go mate constraint unsupported; using ordinary search limits");
+                }
                 active = Some(spawn_search(game.clone(), limits, evaluator, handshake));
             }
             "stop" => stop_search(&mut active),
-            "ponderhit" => {}
+            "ponderhit" => {
+                if let Some(search) = &active {
+                    search.ponderhit();
+                }
+            }
             "quit" => {
                 stop_search(&mut active);
                 break;
@@ -149,11 +169,41 @@ fn out(text: &str) {
 struct ActiveSearch {
     control: SearchControl,
     handle: thread::JoinHandle<()>,
+    gate: Arc<(Mutex<Hold>, Condvar)>,
+    timer: Option<mpsc::Sender<TimerEvent>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Hold {
+    None,
+    Infinite,
+    Ponder,
+}
+enum TimerEvent {
+    Start,
+    Finished,
+}
+
+impl ActiveSearch {
+    fn ponderhit(&self) {
+        let (lock, wake) = &*self.gate;
+        let mut hold = lock.lock().unwrap();
+        if *hold == Hold::Ponder {
+            *hold = Hold::None;
+            if let Some(timer) = &self.timer {
+                let _ = timer.send(TimerEvent::Start);
+            }
+            wake.notify_all();
+        }
+    }
 }
 
 fn stop_search(active: &mut Option<ActiveSearch>) {
     if let Some(search) = active.take() {
         search.control.cancel();
+        let (lock, wake) = &*search.gate;
+        *lock.lock().unwrap() = Hold::None;
+        wake.notify_all();
         let _ = search.handle.join();
     }
 }
@@ -218,8 +268,13 @@ fn move_from_uci(token: &str) -> Option<Move> {
     }
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 struct GoLimits {
+    searchmoves: Option<Vec<String>>,
+    root_moves: Option<Vec<Move>>,
+    mate: bool,
+    infinite: bool,
+    ponder: bool,
     depth: Option<u32>,
     nodes: Option<u64>,
     movetime: Option<u64>,
@@ -235,6 +290,34 @@ fn parse_go(tokens: Vec<&str>) -> GoLimits {
     let mut index = 0;
     while index < tokens.len() {
         let key = tokens[index];
+        if key == "searchmoves" {
+            index += 1;
+            let moves = limits.searchmoves.get_or_insert_with(Vec::new);
+            while index < tokens.len()
+                && !matches!(
+                    tokens[index],
+                    "searchmoves"
+                        | "ponder"
+                        | "wtime"
+                        | "btime"
+                        | "winc"
+                        | "binc"
+                        | "movestogo"
+                        | "depth"
+                        | "nodes"
+                        | "mate"
+                        | "movetime"
+                        | "infinite"
+                )
+            {
+                moves.push(tokens[index].to_string());
+                index += 1;
+            }
+            continue;
+        }
+        if key == "mate" {
+            limits.mate = true;
+        }
         let value = tokens
             .get(index + 1)
             .and_then(|text| text.parse::<u64>().ok());
@@ -247,7 +330,8 @@ fn parse_go(tokens: Vec<&str>) -> GoLimits {
             ("winc", Some(value)) => limits.winc = Some(value),
             ("binc", Some(value)) => limits.binc = Some(value),
             ("movestogo", Some(value)) => limits.movestogo = Some(value.max(1)),
-            ("infinite", _) | ("ponder", _) => {}
+            ("infinite", _) => limits.infinite = true,
+            ("ponder", _) => limits.ponder = true,
             _ => {}
         }
         index += if value.is_some() { 2 } else { 1 };
@@ -336,10 +420,28 @@ fn spawn_search(
     evaluator: EvaluatorChoice,
     report_evaluator: bool,
 ) -> ActiveSearch {
-    let budget = time_budget_ms(&game, &limits);
+    let budget = if limits.infinite && !limits.ponder {
+        None
+    } else {
+        time_budget_ms(&game, &limits)
+    };
     let config = search_config(&limits);
     let control = SearchControl::new();
     let worker_control = control.clone();
+    let hold = if limits.ponder {
+        Hold::Ponder
+    } else if limits.infinite {
+        Hold::Infinite
+    } else {
+        Hold::None
+    };
+    let gate = Arc::new((Mutex::new(hold), Condvar::new()));
+    let worker_gate = Arc::clone(&gate);
+    let (timer, timer_receiver) = mpsc::channel();
+    if hold == Hold::None {
+        let _ = timer.send(TimerEvent::Start);
+    }
+    let worker_timer = timer.clone();
 
     // External logs can prove which evaluator actually ran. Printed before the
     // search thread starts so the line always precedes its info/bestmove pair.
@@ -359,63 +461,127 @@ fn spawn_search(
         // exists per running search and none survives it.
         let deadline = budget.map(|budget| {
             let deadline_control = worker_control.clone();
-            let (finished, wait) = mpsc::channel::<()>();
-            let waiter = thread::spawn(move || {
-                if matches!(
-                    wait.recv_timeout(Duration::from_millis(budget)),
-                    Err(RecvTimeoutError::Timeout)
-                ) {
+            thread::spawn(move || {
+                if matches!(timer_receiver.recv(), Ok(TimerEvent::Start))
+                    && matches!(
+                        timer_receiver.recv_timeout(Duration::from_millis(budget)),
+                        Err(RecvTimeoutError::Timeout)
+                    )
+                {
                     deadline_control.cancel();
                 }
-            });
-            (finished, waiter)
+            })
         });
         let started = Instant::now();
-        let result = match evaluator {
+        let result: Result<SearchResult, String> = match evaluator {
             EvaluatorChoice::Classical => {
-                search_controlled(&game, &HandcraftedEvaluator, &config, &worker_control)
+                if let Some(moves) = &limits.root_moves {
+                    search_controlled_restricted(
+                        &game,
+                        &HandcraftedEvaluator,
+                        &config,
+                        &worker_control,
+                        moves,
+                    )
+                    .map_err(|e| e.to_string())
+                } else {
+                    search_controlled(&game, &HandcraftedEvaluator, &config, &worker_control)
+                        .map_err(|e| e.to_string())
+                }
             }
             EvaluatorChoice::Nnue => {
                 // The session is owned by this search: reset happens inside the
                 // search, and the session is dropped (balanced) when it ends.
                 let mut session = Session::new(game.position());
-                search_controlled_with_session(
-                    &game,
-                    &N2Evaluator,
-                    &mut session,
-                    &config,
-                    &worker_control,
-                )
+                if let Some(moves) = &limits.root_moves {
+                    search_controlled_with_session_restricted(
+                        &game,
+                        &N2Evaluator,
+                        &mut session,
+                        &config,
+                        &worker_control,
+                        moves,
+                    )
+                    .map_err(|e| e.to_string())
+                } else {
+                    search_controlled_with_session(
+                        &game,
+                        &N2Evaluator,
+                        &mut session,
+                        &config,
+                        &worker_control,
+                    )
+                    .map_err(|e| e.to_string())
+                }
             }
         };
-        if let Some((finished, waiter)) = deadline {
-            let _ = finished.send(());
+        let (lock, wake) = &*worker_gate;
+        let mut hold = lock.lock().unwrap();
+        while *hold != Hold::None {
+            hold = wake.wait(hold).unwrap();
+        }
+        drop(hold);
+        if let Some(waiter) = deadline {
+            let _ = worker_timer.send(TimerEvent::Finished);
             let _ = waiter.join();
         }
-        report(&game, result, started, budget);
+        report(
+            &game,
+            result,
+            started,
+            if limits.ponder { None } else { budget },
+            limits.root_moves.as_deref(),
+        );
         let _ = io::stdout().flush();
     });
 
-    ActiveSearch { control, handle }
+    ActiveSearch {
+        control,
+        handle,
+        gate,
+        timer: budget.map(|_| timer),
+    }
 }
 
 /// Print genuine diagnostics plus a legal `bestmove`.
 fn report(
     game: &Game,
-    result: Result<SearchResult, horseflight::search::ConfigError>,
+    result: Result<SearchResult, String>,
     started: Instant,
     budget: Option<u64>,
+    root_moves: Option<&[Move]>,
 ) {
     let result = match result {
         Ok(result) => result,
         Err(error) => {
             out(&format!("info string search rejected: {error}"));
-            out(&format!("bestmove {}", first_legal_or_null(game)));
+            out(&format!("bestmove {}", allowed_first(game, root_moves)));
             return;
         }
     };
 
     let elapsed_ms = started.elapsed().as_millis();
+    if let SearchAction::Claim(claim) = result.action {
+        match claim {
+            horseflight::DrawClaim::Current => out("info string draw claim recommended: current position; controller must claim the draw"),
+            horseflight::DrawClaim::Intended(movement) => out(&format!(
+                "info string draw claim recommended: intended move {}; controller must claim the draw before playing it",
+                movement.to_uci()
+            )),
+        }
+        out("info string bestmove is an unsearched legal fallback, not a draw claim");
+        let fallback = match claim {
+            horseflight::DrawClaim::Intended(movement)
+                if root_moves.is_none_or(|allowed| allowed.contains(&movement))
+                    && game.position().legal_moves().contains(&movement) =>
+            {
+                movement.to_uci()
+            }
+            _ => allowed_first(game, root_moves),
+        };
+        out(&format!("bestmove {fallback}"));
+        return;
+    }
     if let Some(score) = result.score {
         let score_text = match mate_distance_plies(score) {
             Some(0) => "mate 0".to_string(),
@@ -453,9 +619,7 @@ fn report(
 
     let chosen = match result.action {
         SearchAction::Move(movement) | SearchAction::Fallback(movement) => Some(movement),
-        // UCI has no draw claim; the claim's own legal move is played instead.
-        SearchAction::Claim(horseflight::DrawClaim::Intended(movement)) => Some(movement),
-        SearchAction::Claim(horseflight::DrawClaim::Current) => None,
+        SearchAction::Claim(_) => unreachable!("claims are reported above"),
         // The game already ended automatically. No move may be played even if
         // legal moves still exist (insufficient material, 75-move, fivefold).
         SearchAction::Terminal(_) => {
@@ -468,10 +632,24 @@ fn report(
             .legal_moves()
             .iter()
             .any(|candidate| candidate.to_uci() == movement.to_uci())
+            && root_moves.is_none_or(|allowed| allowed.contains(movement))
     });
     match legal {
         Some(movement) => out(&format!("bestmove {}", movement.to_uci())),
-        None => out(&format!("bestmove {}", first_legal_or_null(game))),
+        None => out(&format!("bestmove {}", allowed_first(game, root_moves))),
+    }
+}
+
+fn allowed_first(game: &Game, root_moves: Option<&[Move]>) -> String {
+    match root_moves {
+        Some(moves) => game
+            .position()
+            .legal_moves()
+            .iter()
+            .find(|m| moves.contains(m))
+            .map(|m| m.to_uci())
+            .unwrap_or_else(|| "0000".to_string()),
+        None => first_legal_or_null(game),
     }
 }
 
@@ -491,6 +669,47 @@ mod tests {
 
     fn limits(args: &str) -> GoLimits {
         parse_go(args.split_whitespace().collect())
+    }
+
+    #[test]
+    fn searchmoves_parser_stops_at_go_keywords() {
+        let parsed = limits("searchmoves e2e4 d2d4 depth 2 mate 3 nodes 50");
+        assert_eq!(parsed.searchmoves.unwrap(), ["e2e4", "d2d4"]);
+        assert_eq!(parsed.depth, Some(2));
+        assert_eq!(parsed.nodes, Some(50));
+        assert!(parsed.mate);
+        assert_eq!(limits("searchmoves depth 2").searchmoves.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn restricted_root_search_obeys_singleton_and_cancel() {
+        let game = Game::startpos();
+        let movement = find_legal_move(&game, "e2e4").unwrap();
+        let config = search_config(&limits("depth 1"));
+        let control = SearchControl::new();
+        let result = search_controlled_restricted(
+            &game,
+            &HandcraftedEvaluator,
+            &config,
+            &control,
+            &[movement],
+        )
+        .unwrap();
+        assert_eq!(result.action, SearchAction::Move(movement));
+        control.cancel();
+        let result = search_controlled_restricted(
+            &game,
+            &HandcraftedEvaluator,
+            &config,
+            &control,
+            &[movement],
+        )
+        .unwrap();
+        assert_eq!(result.action, SearchAction::Fallback(movement));
+        assert!(
+            search_controlled_restricted(&game, &HandcraftedEvaluator, &config, &control, &[])
+                .is_err()
+        );
     }
 
     #[test]

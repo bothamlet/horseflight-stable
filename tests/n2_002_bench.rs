@@ -1,4 +1,4 @@
-//! Local performance measurements for the N2-002 evaluator.
+//! Local NNUE inference and search benchmarks.
 //!
 //! Run with `cargo test --release --test n2_002_bench -- --ignored --nocapture`.
 //! Measurements are emitted as JSON lines.

@@ -1,4 +1,4 @@
-//! Milestone B: real-process UCI tests for explicit evaluator selection.
+//! UCI integration tests for evaluator selection.
 //!
 //! These tests drive the built `uci` binary exactly as a GUI or match runner
 //! would, proving the handshake, the opt-in `Eval` option, the truthful
@@ -224,7 +224,7 @@ fn switching_to_nnue_reports_the_embedded_model_and_plays_legal_moves() {
     uci.send("setoption name Eval value nnue");
     let confirmation = uci.wait_for("info string Eval=nnue");
     assert!(
-        confirmation.contains("model=horseflight-n2-002"),
+        confirmation.contains("model=horseflight-nnue"),
         "model id missing: {confirmation}"
     );
     assert!(

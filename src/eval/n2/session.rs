@@ -1,4 +1,4 @@
-//! Reversible incremental evaluation session for the N2-002 model.
+//! Incremental NNUE evaluation with reversible move updates.
 //!
 //! [`Session`] owns one [`Accumulator`] plus a fixed-capacity undo stack. Search
 //! resets it once at the root, then calls [`EvaluationSession::on_make`] after

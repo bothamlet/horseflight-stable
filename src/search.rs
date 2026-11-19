@@ -323,7 +323,7 @@ pub fn search<E: Evaluator + ?Sized>(
     evaluator: &E,
     config: &SearchConfig,
 ) -> Result<SearchResult, ConfigError> {
-    search_inner(game, evaluator, config, None, None)
+    search_inner(game, evaluator, config, None, None, None)
 }
 
 /// Search `game` cooperatively, stopping at a bounded check when `control` is
@@ -341,7 +341,7 @@ pub fn search_controlled<E: Evaluator + ?Sized>(
     config: &SearchConfig,
     control: &SearchControl,
 ) -> Result<SearchResult, ConfigError> {
-    search_inner(game, evaluator, config, Some(control), None)
+    search_inner(game, evaluator, config, Some(control), None, None)
 }
 
 /// Search `game` with an incremental evaluation session, without mutating it.
@@ -363,7 +363,7 @@ where
     E: Evaluator + ?Sized,
     S: EvaluationSession,
 {
-    search_inner(game, evaluator, config, None, Some(session))
+    search_inner(game, evaluator, config, None, Some(session), None)
 }
 
 /// [`search_with_session`] with cooperative cancellation.
@@ -378,7 +378,85 @@ where
     E: Evaluator + ?Sized,
     S: EvaluationSession,
 {
-    search_inner(game, evaluator, config, Some(control), Some(session))
+    search_inner(game, evaluator, config, Some(control), Some(session), None)
+}
+
+/// Error from a restricted root search. Configuration validation takes precedence.
+#[derive(Debug)]
+pub enum RestrictedSearchError {
+    Config(ConfigError),
+    NoLegalRootMoves,
+}
+
+impl fmt::Display for RestrictedSearchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Config(error) => write!(f, "{error}"),
+            Self::NoLegalRootMoves => f.write_str("no allowed legal root moves"),
+        }
+    }
+}
+impl std::error::Error for RestrictedSearchError {}
+
+/// Search only requested legal root moves, preserving legal generation order.
+/// Membership uses canonical generated `Move` values (including special-move flags),
+/// not just matching source and destination squares. An automatic terminal outcome
+/// takes precedence over an empty intersection.
+pub fn search_controlled_restricted<E: Evaluator + ?Sized>(
+    game: &Game,
+    evaluator: &E,
+    config: &SearchConfig,
+    control: &SearchControl,
+    root_moves: &[Move],
+) -> Result<SearchResult, RestrictedSearchError> {
+    restricted_inner(game, evaluator, config, control, None, root_moves)
+}
+
+/// Restricted search with a balanced incremental evaluation session.
+/// Root-move membership uses canonical generated `Move` values, including flags.
+pub fn search_controlled_with_session_restricted<E, S>(
+    game: &Game,
+    evaluator: &E,
+    session: &mut S,
+    config: &SearchConfig,
+    control: &SearchControl,
+    root_moves: &[Move],
+) -> Result<SearchResult, RestrictedSearchError>
+where
+    E: Evaluator + ?Sized,
+    S: EvaluationSession,
+{
+    restricted_inner(game, evaluator, config, control, Some(session), root_moves)
+}
+
+fn restricted_inner<'a, E: Evaluator + ?Sized>(
+    game: &Game,
+    evaluator: &'a E,
+    config: &SearchConfig,
+    control: &'a SearchControl,
+    session: Option<&'a mut dyn EvaluationSession>,
+    root_moves: &[Move],
+) -> Result<SearchResult, RestrictedSearchError> {
+    config.validate().map_err(RestrictedSearchError::Config)?;
+    let candidates: Vec<Move> = game
+        .position()
+        .legal_moves()
+        .iter()
+        .copied()
+        .filter(|m| root_moves.contains(m))
+        .collect();
+    if candidates.is_empty() && !game.outcome().is_over() {
+        return Err(RestrictedSearchError::NoLegalRootMoves);
+    }
+    search_inner(
+        game,
+        evaluator,
+        config,
+        Some(control),
+        session,
+        Some(&candidates),
+    )
+    .map_err(RestrictedSearchError::Config)
 }
 
 fn search_inner<'a, E: Evaluator + ?Sized>(
@@ -387,6 +465,7 @@ fn search_inner<'a, E: Evaluator + ?Sized>(
     config: &SearchConfig,
     control: Option<&'a SearchControl>,
     session: Option<&'a mut dyn EvaluationSession>,
+    root_moves: Option<&[Move]>,
 ) -> Result<SearchResult, ConfigError> {
     let config = config.validate()?;
     let mut worker = Worker {
@@ -400,7 +479,7 @@ fn search_inner<'a, E: Evaluator + ?Sized>(
         previous_pv: Vec::new(),
         pv: vec![Vec::new(); MAX_PLY as usize + 1],
     };
-    Ok(worker.run())
+    Ok(worker.run(root_moves))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -443,7 +522,7 @@ struct Worker<'a, E: Evaluator + ?Sized> {
 }
 
 impl<E: Evaluator + ?Sized> Worker<'_, E> {
-    fn run(&mut self) -> SearchResult {
+    fn run(&mut self, restricted: Option<&[Move]>) -> SearchResult {
         let started = Instant::now();
         // A reused session may carry state from an earlier search or a caller
         // that made moves directly; rebuild it from the actual root once.
@@ -467,16 +546,19 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
             );
         }
 
-        if self.cancelled() {
-            return self.cancelled_without_iteration(started);
-        }
-
         let root_position = *self.game.position();
-        // The game is not over, so the root has at least one legal move.
-        let root_moves: Vec<Move> = root_position.legal_moves().to_vec();
-        let claim = match self.root_claim() {
+        let root_moves: Vec<Move> = root_position
+            .legal_moves()
+            .iter()
+            .copied()
+            .filter(|m| restricted.is_none_or(|allowed| allowed.contains(m)))
+            .collect();
+        if self.cancelled() {
+            return self.cancelled_without_iteration(started, &root_moves);
+        }
+        let claim = match self.root_claim(&root_moves) {
             Ok(claim) => claim,
-            Err(Stop::Cancelled) => return self.cancelled_without_iteration(started),
+            Err(Stop::Cancelled) => return self.cancelled_without_iteration(started, &root_moves),
             Err(stop) => {
                 let fallback = root_moves[0];
                 return self.finish(
@@ -589,14 +671,13 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
     ///
     /// Cancellation is polled before each costly intended-move simulation, so a
     /// token cancelled during this scan stops before another probe begins.
-    fn root_claim(&mut self) -> Result<Option<DrawClaim>, Stop> {
+    fn root_claim(&mut self, moves: &[Move]) -> Result<Option<DrawClaim>, Stop> {
         if self.cancelled() {
             return Err(Stop::Cancelled);
         }
         if self.game.claimable_now().any() {
             return Ok(Some(DrawClaim::Current));
         }
-        let moves = self.game.position().legal_moves();
         for movement in moves.iter().copied() {
             if self.cancelled() {
                 return Err(Stop::Cancelled);
@@ -616,10 +697,10 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
         self.control.is_some_and(SearchControl::is_cancelled)
     }
 
-    fn cancelled_without_iteration(&self, started: Instant) -> SearchResult {
+    fn cancelled_without_iteration(&self, started: Instant, root_moves: &[Move]) -> SearchResult {
         // The game is not over on this path, so the root has a legal move to
         // report as an explicitly unsearched fallback.
-        let fallback = self.game.position().legal_moves()[0];
+        let fallback = root_moves[0];
         self.finish(
             SearchAction::Fallback(fallback),
             None,

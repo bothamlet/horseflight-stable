@@ -1,4 +1,4 @@
-//! Phase A2 same-run A/B measurements for the dispatched N2-002 head.
+//! Same-process scalar and AVX2 inference comparisons.
 //!
 //! Both arms run in one process and one build, so the comparison is not exposed
 //! to the host's cross-run load swings. Arms are alternated (and the order is

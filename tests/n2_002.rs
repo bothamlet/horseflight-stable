@@ -1,4 +1,4 @@
-//! Milestone A acceptance tests for the embedded N2-002 integer model.
+//! Model validation and reference inference tests for the embedded NNUE.
 //!
 //! Covers exact golden parity (features, acc, a1, h, a2, output numerator),
 //! asset validation failures, ties-even/clamp boundaries, incremental
