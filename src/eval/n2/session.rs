@@ -58,12 +58,7 @@ const EMPTY_DELTA: Delta = Delta {
     removed_len: 0,
 };
 
-/// The three model inputs that are not piece placement, read directly.
-///
-/// This is a constant-time read of the position: side to move, the four
-/// castling-rights bits and the *legal* en-passant file. It deliberately does
-/// not walk the board, so the per-move delta costs nothing beyond the legal-EP
-/// check the schema itself requires.
+/// Non-piece inputs: side to move, castling rights, and a legal en-passant file.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct MetaInputs {
     white_to_move: bool,

@@ -1,7 +1,4 @@
-//! Phase A1 search call distribution and activation sparsity.
-//!
-//! Builds only with the profile-only feature and is `#[ignore]`d as a
-//! measurement:
+//! Measure search call counts and activation sparsity with `profiling`:
 //!
 //! ```text
 //! taskset -c 6 cargo test --release --features profiling \
@@ -27,7 +24,7 @@ use horseflight::profiling;
 use horseflight::search::{search_with_session, SearchAction, SearchConfig, SearchResult};
 use horseflight::{Game, Move, Position};
 
-/// The historical four-position suite plus deterministic extra coverage.
+/// Fixed positions for collecting search counters.
 const SUITE: &[(&str, &str)] = &[
     (
         "startpos",

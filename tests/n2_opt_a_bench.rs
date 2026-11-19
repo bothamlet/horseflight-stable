@@ -24,7 +24,7 @@ use horseflight::eval::n2::{self, Accumulator, N2Evaluator, ACCUMULATOR_SIZE, HI
 use horseflight::eval::{EvaluationSession, Evaluator, HandcraftedEvaluator};
 use horseflight::{Game, Position};
 
-/// The historical four-position suite, unchanged and in the original order.
+/// Fixed positions for stage timing.
 const CORE_FENS: &[&str] = &[
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
     "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",

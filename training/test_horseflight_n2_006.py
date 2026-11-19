@@ -1,4 +1,4 @@
-"""CPU tests; no A100 required. Run: python test_horseflight_n2_006.py"""
+"""CPU checks for training, checkpoint resume, and trial promotion."""
 import json
 import tempfile
 from dataclasses import replace, asdict
@@ -77,7 +77,7 @@ def test_halving_manifest():
                 rid = hf.trial_id(config)
                 d = output_dir / rid
                 d.mkdir(parents=True, exist_ok=True)
-                # Config 0 always best. Stage score must be calculated at the correct budget.
+                # Seed 0 wins at every budget; keep per-epoch scores for rung checks.
                 history = [{'epoch': e, 'val_mse_canonical': (config.seed + 1) / 10000 + (30-e)/100000}
                            for e in range(1, budget+1)]
                 hf.atomic_json(d / 'summary.json', {'id': rid, 'config': asdict(config),

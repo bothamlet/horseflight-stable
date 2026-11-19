@@ -1,13 +1,7 @@
-//! Minimal UCI adapter for benchmarking Horseflight.
+//! UCI front end for Horseflight. `Eval` selects classical evaluation or NNUE.
 //!
-//! The `Eval` option selects the classical evaluator (default) or the embedded
-//! NNUE with incremental accumulation. This adapter translates UCI
-//! commands and clock limits into engine search requests.
-//!
-//! Time management is deliberately simple and conservative: a fraction of the
-//! remaining clock plus the increment, cancelled by the engine's own
-//! cooperative [`SearchControl`]. Cancellation keeps the last fully completed
-//! iteration, so a timeout costs depth, never legality.
+//! Clock limits set a cancellation deadline. The engine reports the last
+//! completed iteration or, if none finished, a legal fallback.
 
 use std::io::{self, BufRead, Write};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -38,12 +32,7 @@ fn main() {
     let mut game = Game::startpos();
     let mut active: Option<ActiveSearch> = None;
     let mut evaluator = EvaluatorChoice::Classical;
-    // The per-search evaluator diagnostic is only emitted for a client that
-    // opened a real UCI session. A driver that never sends `uci` (for example
-    // the pinned N1 search-output regression) therefore keeps seeing exactly the
-    // original `info`/`bestmove` stream, while every GUI and match runner still
-    // gets the active-evaluator evidence it needs. `setoption` replies are
-    // treated the same way: a client that never handshook never asked for them.
+    // Keep evaluator diagnostics and option replies out of pre-handshake output.
     let mut handshake = false;
 
     for line in stdin.lock().lines() {
@@ -76,9 +65,6 @@ fn main() {
                 // `ucinewgame` resets the game, never the selected evaluator.
             }
             "setoption" => match parse_setoption(&tokens.collect::<Vec<_>>()) {
-                // Only a real selection change interrupts a running search; an
-                // unknown option or value is reported and changes nothing, as
-                // it always has.
                 Ok((name, value)) if name == "Eval" => match EvaluatorChoice::parse(&value) {
                     Some(choice) => {
                         stop_search(&mut active);
@@ -443,8 +429,7 @@ fn spawn_search(
     }
     let worker_timer = timer.clone();
 
-    // External logs can prove which evaluator actually ran. Printed before the
-    // search thread starts so the line always precedes its info/bestmove pair.
+    // Print the evaluator before the worker can emit search results.
     if report_evaluator {
         match evaluator {
             EvaluatorChoice::Classical => out("info string eval=classical"),
@@ -456,9 +441,7 @@ fn spawn_search(
     }
 
     let handle = thread::spawn(move || {
-        // The deadline waiter parks on the channel, so it leaves as soon as the
-        // search finishes instead of sleeping out the whole budget. One waiter
-        // exists per running search and none survives it.
+        // A finished search wakes the timer without waiting out its budget.
         let deadline = budget.map(|budget| {
             let deadline_control = worker_control.clone();
             thread::spawn(move || {
@@ -490,8 +473,6 @@ fn spawn_search(
                 }
             }
             EvaluatorChoice::Nnue => {
-                // The session is owned by this search: reset happens inside the
-                // search, and the session is dropped (balanced) when it ends.
                 let mut session = Session::new(game.position());
                 if let Some(moves) = &limits.root_moves {
                     search_controlled_with_session_restricted(

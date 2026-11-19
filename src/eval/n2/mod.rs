@@ -525,17 +525,12 @@ pub struct ForwardTrace {
 
 /// Incremental accumulator for the 781-input schema.
 ///
-/// [`Accumulator::rebuild`] is the reference computation.
-/// [`Accumulator::apply_move`] and [`Accumulator::revert_move`] take both
-/// positions around the move so the three metadata inputs (side to move,
-/// castling rights, legal en-passant file) are never forgotten; they update the
-/// accumulator from piece deltas and metadata differences without allocating or
-/// rebuilding.
+/// [`Accumulator::rebuild`] is the reference. Move updates apply piece and
+/// metadata deltas without rebuilding or allocating.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Accumulator {
     acc: [i32; ACCUMULATOR_SIZE],
-    /// Profiling-only knob for the A2 attribution harness: force the scalar
-    /// row kernels while keeping every other path unchanged.
+    /// Benchmark scalar row updates without changing inference dispatch.
     #[cfg(feature = "profiling")]
     scalar_rows: bool,
 }
@@ -567,7 +562,7 @@ impl Accumulator {
         &self.acc
     }
 
-    /// Profiling-only: force scalar row add/sub (A2 attribution harness).
+    /// Force scalar row updates for a benchmark.
     #[cfg(feature = "profiling")]
     pub fn set_scalar_rows(&mut self, enabled: bool) {
         self.scalar_rows = enabled;

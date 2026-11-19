@@ -10,7 +10,7 @@
 //! # Search and evaluation boundary
 //!
 //! [`search::search`] takes a [`Game`], an [`eval::Evaluator`] and a
-//! [`search::SearchConfig`], clones the game once and reports a truthful
+//! [`search::SearchConfig`], clones the game once and returns a
 //! [`search::SearchResult`]. Search owns rule adjudication and terminal
 //! scoring; every leaf score comes from the evaluator. A caller that needs to
 //! interrupt a running search can pass a [`search::SearchControl`] to
@@ -52,13 +52,13 @@
 //! position (for example a side-not-to-move in check). Counters are `u32`; a
 //! legal move that would overflow one is rejected with
 //! [`MoveError::CounterOverflow`] without mutation; search reports that as a
-//! [`search::SearchStop::Transition`] interruption rather than hiding it.
+//! [`search::SearchStop::Transition`] interruption.
 //!
 //! Draw adjudication distinguishes automatic results (checkmate, stalemate,
 //! conservative insufficient material, fivefold repetition, seventy-five-move)
 //! from claimable rules (threefold repetition, fifty-move) in [`Game`]. The
-//! material test is deliberately conservative and is not a complete FIDE dead
-//! position proof. Search treats a claim as an optional zero-score action.
+//! material test covers common cases, not every FIDE dead position. Search
+//! treats a claim as an optional zero-score action.
 
 mod attacks;
 pub mod bitboard;

@@ -1,11 +1,6 @@
-//! Classical evaluation regression snapshots captured from the unchanged original
-//! evaluation/search implementation at `master` HEAD 1446a74.
+//! Classical search regression fixtures from commit `1446a74`.
 //!
-//! These are behavioural fixtures, not tuning targets: every value here was
-//! produced by the pre-refactor code and must remain byte-identical after the
-//! evaluator module split and the generic-dispatch change. `nodes`/`q_nodes`,
-//! action/claim/score/completed depth, PV and stop are deterministic; wall time
-//! and NPS are deliberately not part of the snapshot.
+//! Compare deterministic results and counters, not wall time or NPS.
 
 mod common;
 

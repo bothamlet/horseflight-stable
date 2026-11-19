@@ -1,8 +1,4 @@
-//! UCI integration tests for evaluator selection.
-//!
-//! These tests drive the built `uci` binary exactly as a GUI or match runner
-//! would, proving the handshake, the opt-in `Eval` option, the truthful
-//! active-model diagnostics and the unchanged default (classical) behaviour.
+//! Exercise evaluator selection and diagnostics through the UCI binary.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};

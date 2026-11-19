@@ -1,10 +1,7 @@
-//! Phase A2 candidate attribution: cumulative head variants and the row-maintenance
-//! ablation, all through the real incremental session and search.
+//! Compare NNUE inference and accumulator variants during search.
 //!
-//! This builds only with the profile-only feature because the stage helpers and
-//! the scalar-row switch are feature-gated. Every arm carries the same
-//! instrumentation hooks, so the comparison is between variants under one build
-//! and one process; it is not a production NPS claim.
+//! All variants run in one process with the same instrumentation. The timings
+//! are for comparison within that run, not for measuring release throughput.
 //!
 //! ```text
 //! taskset -c 6 cargo test --release --features profiling \

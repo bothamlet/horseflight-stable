@@ -1,8 +1,6 @@
-//! Phase A2 per-stage same-run A/B, with the profile-only scaffolding.
+//! Compare scalar and dispatched kernels one layer at a time.
 //!
-//! Each arm is the A1 stage function (original scalar arithmetic) or its
-//! dispatched counterpart. Arms are interleaved and reversed on alternate
-//! repeats, so the ratios are same-run and not cross-run load comparisons.
+//! Alternate execution order to limit timing bias.
 //!
 //! ```text
 //! taskset -c 6 cargo test --release --features profiling \

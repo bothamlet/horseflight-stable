@@ -1,9 +1,6 @@
 //! Classical UCI output regression.
 //!
-//! The reference output below was captured from the unchanged original binary
-//! at `master` HEAD 1446a74. Only `nps` and `time` (wall-clock measurements)
-//! are removed before comparison; every deterministic field, including depth,
-//! score, node count, PV and `bestmove`, is fixed.
+//! Compare against commit `1446a74`, ignoring only `nps` and `time`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};

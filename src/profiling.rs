@@ -1,10 +1,4 @@
-//! Profiling-only instrumentation (Cargo feature `profiling`, off by default).
-//!
-//! This module is compiled only when `--features profiling` is passed, so a
-//! normal build contains neither these counters nor any hook that updates them.
-//! It exists because a sampling profiler is unavailable on this host
-//! (`perf_event_paranoid = 4`), so Phase A1 measures search call distribution
-//! and per-evaluation time with explicit counters and timers instead.
+//! Search counters and timers. Normal builds omit them.
 //!
 //! # What is counted
 //!
@@ -17,7 +11,7 @@
 //! available: the engine has no transposition table, so it is a count of *would
 //! have been* repeat evaluations, not a reuse the search performs.
 //!
-//! # Cost this instrumentation adds (must be disclosed, never subtracted)
+//! # Measurement overhead
 //!
 //! - one relaxed atomic addition per counted event;
 //! - two `Instant::now()` calls per timed evaluation and per make/unmake;
@@ -151,13 +145,9 @@ pub struct Snapshot {
     pub rebuilds: u64,
     /// Made nodes whose *whole subtree* performed no static evaluation.
     ///
-    /// Historical A1 metric, preserved under an explicit name: a parent that
-    /// is itself unevaluated but has an evaluated descendant is not counted
-    /// here. See [`Snapshot::prepared_unevaluated_subtree`] and
-    /// [`Snapshot::prepared_unevaluated_own`].
+    /// An unevaluated node with an evaluated descendant is not counted here.
     pub prepared_unevaluated_subtree: u64,
-    /// Made frames whose own accumulator was never statically evaluated,
-    /// regardless of descendants (the metric the A1 report intended).
+    /// Made positions that were not evaluated, regardless of their descendants.
     pub prepared_unevaluated_own: u64,
     /// Static evaluations performed at a quiescence stand-pat call site.
     pub static_evaluations_quiescence: u64,
@@ -198,7 +188,7 @@ impl Snapshot {
         }
     }
 
-    /// Historical subtree-level share; kept for A1 comparability only.
+    /// Share of made positions whose subtree had no static evaluation.
     pub fn prepared_unevaluated_subtree_ratio(&self) -> f64 {
         if self.make_calls == 0 {
             0.0

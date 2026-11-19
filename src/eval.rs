@@ -1,21 +1,8 @@
-//! Original, replaceable position evaluation.
+//! Evaluation interface and score ranges shared by search.
 //!
-//! Search only ever sees a bounded integer score through the [`Evaluator`]
-//! trait, so the handcrafted terms in [`classical`] can be replaced
-//! (material-only, a test double, a full-rebuild neural evaluator) without
-//! touching search code.
-//! Those terms are original and deliberately small; no engine piece-square
-//! tables or tuned constants are copied.
-//!
-//! This module is the evaluation boundary. It owns the [`Evaluator`] trait,
-//! score bands, mate/score predicates and the clamp search applies to every
-//! evaluator result. The concrete handcrafted and material evaluators live in
-//! [`classical`] and are re-exported here for compatibility, so existing
-//! `eval::HandcraftedEvaluator` and crate-root paths keep working.
-//!
-//! [`features`] defines the versioned binary piece-square input schema a future
-//! neural evaluator will consume. It is intentionally independent of the
-//! classical terms and of game state not represented by piece placement.
+//! [`classical`] provides the handcrafted and material-only evaluators.
+//! [`n2`] contains the embedded NNUE. [`features`] defines a separate,
+//! piece-placement-only feature schema.
 //!
 //! # Score bands and sign
 //!

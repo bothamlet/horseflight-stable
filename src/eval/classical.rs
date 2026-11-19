@@ -1,11 +1,4 @@
-//! Handcrafted classical evaluation terms.
-//!
-//! This module owns the current playing evaluation: material plus the original
-//! pawn-advancement and minor-centralisation terms. The arithmetic here is
-//! deliberately preserved exactly from the pre-split implementation; it is a
-//! behavioural fixture, not a tuning surface.
-//!
-//! # Terms
+//! Classical evaluation: material, pawn advancement, and minor-piece centralisation.
 //!
 //! - Material: pawn 100, knight 320, bishop 330, rook 500, queen 900, king 0.
 //! - Pawn advancement: 6 cp per rank advanced from the pawn's own start rank.

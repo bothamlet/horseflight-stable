@@ -42,7 +42,7 @@ fn cpw_positions_through_depth_three() {
 }
 
 #[test]
-#[ignore = "depth-5 start position is exercised by the release CLI acceptance gate"]
+#[ignore = "slow in debug; run in release"]
 fn startpos_perft_depth_five() {
     assert_eq!(
         perft(&horseflight::Position::startpos(), 5).unwrap(),

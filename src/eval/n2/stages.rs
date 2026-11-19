@@ -1,16 +1,7 @@
-//! Stage-level accessors for the Phase A1 profiling harness.
+//! Per-layer NNUE benchmarks, enabled by the `profiling` feature.
 //!
-//! Compiled only with `--features profiling`. It exists so the evidence
-//! harness can time one stage of the forward pass at a time and inspect tensor
-//! layout without changing any production kernel: the functions here are
-//! *copies* of the arithmetic in [`super::forward_trace`] and the private
-//! activation helpers it calls, split at the stage boundaries a profiler would
-//! report.
-//!
-//! Each `stage_*` function runs exactly one stage, so a stage's measured cost is
-//! that stage alone. The copies must stay in step with the production kernels
-//! they mirror; [`tensors`] exposes the same private tensors [`super::model`]
-//! validated, and nothing here is reachable from a normal build.
+//! Each `stage_*` function isolates one step of inference. Keep its arithmetic
+//! in sync with the production kernels it measures.
 
 use super::{
     activate_accumulator, activate_hidden, div_ties_even_wide, model, ACCUMULATOR_SIZE, ACC_SCALE,

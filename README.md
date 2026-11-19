@@ -1,6 +1,6 @@
 # Horseflight
 
-Horseflight is a Rust chess engine with a UCI interface and command-line tools for analysis and move-generation testing. It uses classical evaluation by default and can switch to an embedded, quantized neural evaluator (NNUE).
+Horseflight is a Rust chess engine with a UCI interface, a position analyzer, and a perft tool for checking move generation. It defaults to classical evaluation and ships with an optional quantized neural network (NNUE).
 
 ## Run
 
@@ -12,7 +12,7 @@ cargo build --release --locked
 ./target/release/perft --divide 4
 ```
 
-Add `target/release/uci` to a UCI-compatible chess GUI. Classical evaluation is the default; select `nnue` under the engine’s `Eval` option to try the neural evaluator. You can also run the binary directly:
+Add `target/release/uci` to your chess GUI and set `Eval` to `nnue` to try the network. Or start the binary in a terminal and enter:
 
 ```text
 uci

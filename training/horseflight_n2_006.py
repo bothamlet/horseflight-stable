@@ -1,7 +1,4 @@
-"""Horseflight N2-006. Standalone worker and reproducible GPU sweep launcher.
-
-Run `python horseflight_n2_006.py --help` for commands. Training caches are read-only.
-"""
+"""Run NNUE training sweeps against read-only data caches."""
 from __future__ import annotations
 
 import argparse
@@ -37,7 +34,7 @@ def fake_quant(x, scale, qmin, qmax):
 
 
 class HorseflightNNUE(nn.Module):
-    """The original N2-005-compatible 781 -> 256 -> 32 -> 1 QAT network."""
+    """781 → 256 → 32 → 1 network for quantization-aware training."""
     def __init__(self, accumulator_width=256, hidden_width=32):
         super().__init__()
         self.accumulator_width = accumulator_width
@@ -168,7 +165,7 @@ def cache_paths(root: Path):
 
 
 def load_data(root: Path, device: torch.device, runtime: Runtime):
-    """Read existing immutable caches; independently copy them into each worker GPU."""
+    """Load the cached dataset for one worker."""
     paths = cache_paths(root)
     missing = [str(p) for p in paths.values() if not p.is_file()]
     if missing:
@@ -193,7 +190,7 @@ def load_data(root: Path, device: torch.device, runtime: Runtime):
     if runtime.dataset_device == "cuda" and target.type != "cuda":
         raise RuntimeError("Requested GPU dataset but CUDA is unavailable")
 
-    # Keep the long int64 index matrix resident on GPU for the whole worker lifetime.
+    # With CUDA placement, keep the indices on the GPU between trials.
     def tensor(a, dtype):
         return torch.from_numpy(np.array(a, copy=True)).to(device=target, dtype=dtype)
     train_x = torch.cat([tensor(arrays["base_features"], torch.long),
@@ -226,7 +223,7 @@ def fast_mirror(x, lut):
 
 
 
-# Independent CPU mirror oracle; do not use GPU's transformation as its own oracle.
+# CPU reference for checking the GPU mirror transform.
 _REFERENCE_LUT = np.arange(782, dtype=np.uint16)
 for _i in range(768):
     _REFERENCE_LUT[_i] = (((_i // 64 + 6) % 12) * 64) + ((_i % 64) ^ 56)
@@ -395,8 +392,7 @@ class Laboratory:
             if config.symmetry_lambda:
                 choose = (torch.rand(len(x), generator=sym_rng, device=self.device)
                           < config.symmetry_fraction) & eligible
-                # Selection retains exact previous paired-sample semantics.
-                # This synchronizes for Campaign B, not the 162-run Campaign A.
+                # Extracting these indices synchronizes CUDA only when symmetry loss is enabled.
                 indices = torch.where(choose)[0]
                 if indices.numel():
                     mirrored_pred = torch.sigmoid(model(fast_mirror(x[indices], self.lut)).reshape(-1).float())
@@ -445,7 +441,7 @@ class Laboratory:
                 raise ValueError("Checkpoint config/dataset mismatch")
             saved_runtime = ck.get("runtime")
             if saved_runtime is None:
-                # Original N2-006 checkpoints predate runtime metadata.
+                # Older checkpoints used the default runtime and did not record it.
                 if self.runtime != Runtime():
                     raise ValueError("Legacy FP32 checkpoint cannot silently switch runtime")
             elif saved_runtime != asdict(self.runtime):
@@ -465,7 +461,7 @@ class Laboratory:
             if verbose:
                 print(f"{rid}: resuming at epoch {start_epoch}; target {budget}", flush=True)
         if start_epoch > budget:
-            # Existing old summaries can omit runtime/rung metadata; reconstruct.
+            # Rebuild the summary from checkpoint history.
             return self._summary(config, history, best_mse, best_epoch)
         n = len(self.train_x)
         for epoch in range(start_epoch, budget + 1):
@@ -557,7 +553,7 @@ class Laboratory:
                 (step * batch_size)) % len(self.train_x)
 
     def profile(self, config: Trial, *, steps=20, warmup=5, output_dir=None):
-        """Isolated no-checkpoint profiler; includes data gather and forward/backward."""
+        """Profile batch gathering and training steps without saving checkpoints."""
         if steps <= 0 or warmup < 0:
             raise ValueError("Invalid steps or warmup")
         from torch.profiler import ProfilerActivity, profile, record_function
@@ -603,7 +599,7 @@ class Laboratory:
         return result
 
     def benchmark(self, config: Trial, *, steps=60, warmup=10):
-        """True-throughput sample, including real dataset gathering, excluding profiler overhead."""
+        """Measure throughput with batch gathering and no profiler."""
         base, model, opt, _ = self._new_model(config)
         _, aug, sym = self._generators(config)
         model.train()
@@ -627,7 +623,7 @@ class Laboratory:
 
 
 def export_leaderboard_from_disk(output_dir: Path, dataset_id: str | None = None):
-    """Parent-side post-round leaderboard, avoiding concurrent GPU-worker writes."""
+    """Write the leaderboard after the workers finish."""
     rows = []
     for path in Path(output_dir).glob("*/summary.json"):
         try:
@@ -699,15 +695,14 @@ def _validate_devices(devices):
 
 
 def _launch_workers(configs, *, budget, devices, root, output_dir, runtime, tag):
-    """Three persistent processes (one per GPU); each loads its dataset only once."""
+    """Start one process per assigned GPU and load its dataset once."""
     devices = _validate_devices(devices)
     configs = list(configs)
     if len({trial_id(c) for c in configs}) != len(configs):
         raise ValueError("Duplicate configuration would cause checkpoint race")
     run_dir = Path(output_dir) / "_launcher" / tag
     run_dir.mkdir(parents=True, exist_ok=True)
-    # Round-robin assignment is deterministic; configs can differ in duration.
-    # A worker runs multiple configs, so GPU data is loaded once per shard.
+    # Assign trials round-robin so the split is reproducible.
     shards = [configs[i::len(devices)] for i in range(len(devices))]
     processes = []
     for i, (device, shard) in enumerate(zip(devices, shards)):
@@ -742,7 +737,7 @@ def _launch_workers(configs, *, budget, devices, root, output_dir, runtime, tag)
         raise
     if failures:
         raise RuntimeError("Worker failures (re-run to resume):\n" + "\n\n".join(failures))
-    # Never advance a rung if any worker stopped before its designated budget.
+    # Check every trial reached the rung's epoch budget before promoting it.
     dataset_ids = set()
     for cfg in configs:
         path = Path(output_dir) / trial_id(cfg) / "summary.json"
@@ -763,7 +758,7 @@ def _launch_workers(configs, *, budget, devices, root, output_dir, runtime, tag)
 
 def run_campaign(configs, *, strategy, devices, root, output_dir, runtime,
                  keep=(40, 10), rungs=(3, 10, 30), campaign_name="a"):
-    """Synchronous successive halving; no pruned candidate is mistaken for complete."""
+    """Prune after each rung; only runs that reach the final budget are complete."""
     configs = list(configs)
     if strategy == "full":
         _launch_workers(configs, budget=configs[0].epochs, devices=devices, root=root,

@@ -29,9 +29,8 @@
 //! [`MAX_PLY`]: a *nonterminal* frontier reached at the cap — checked or quiet —
 //! aborts the iteration with [`SearchStop::PlyCap`] instead of a fabricated
 //! static, exact or mate score, because the remaining continuations are unknown.
-//! With quiescence
-//! disabled, depth-zero pages return a static evaluation after rule checks: an
-//! explicit diagnostic baseline, not a claim of tactical accuracy.
+//! With quiescence disabled, depth-zero nodes use static evaluation after
+//! checking the rules.
 //!
 //! # Terminal, draw and claim adjudication
 //!
@@ -57,7 +56,7 @@
 //! occurrence. Three occurrences therefore need at least eight quiet plies and
 //! five need at least sixteen.
 //!
-//! # Budgets and purity
+//! # Node budget and caller state
 //!
 //! [`SearchConfig::node_limit`] is a hard aggregate budget: [`SearchResult::nodes`]
 //! counts every main and quiescence entry (the root of each iteration included)
@@ -246,7 +245,7 @@ pub enum SearchAction {
     Fallback(Move),
 }
 
-/// A complete, truthful search report.
+/// Result of a search, including why it stopped.
 #[derive(Clone, Debug)]
 pub struct SearchResult {
     /// Recommended action, distinguishing searched moves, claims, terminals and fallbacks.
@@ -314,7 +313,7 @@ impl SearchControl {
     }
 }
 
-/// Search `game` without mutating it, returning a truthful report.
+/// Search `game` without modifying it.
 ///
 /// This entry point has no cancellation and is deterministic: adding
 /// [`search_controlled`] does not change its results.
@@ -764,8 +763,7 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
         beta: i32,
         on_previous_pv: bool,
     ) -> Result<i32, Stop> {
-        // Clear this ply's line first: terminal and leaf nodes return before
-        // writing a PV, and a parent must never splice a stale sibling line.
+        // Leaf and terminal nodes return early; don't reuse a sibling's PV.
         self.pv[ply as usize].clear();
         if depth == 0 {
             return if self.config.quiescence {
