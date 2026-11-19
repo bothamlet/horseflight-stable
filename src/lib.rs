@@ -1,24 +1,17 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
-//! Horseflight: an original, dependency-free chess foundation and first search.
+//! Chess move generation, search and evaluation with no runtime dependencies.
 //!
-//! Phase 1A provides typed squares/pieces/colours, a hybrid square-array plus
-//! occupancy-bitboard board, original ray-walking legal move generation,
-//! reversible in-place make/unmake with fixed-size undo and piece deltas,
-//! deterministic Zobrist hashing, FEN parsing/serialization, history-aware draw
-//! rules and perft. Phase 1B adds an original replaceable evaluation and a
-//! full-window negamax alpha-beta search with iterative deepening, previous-PV
-//! and MVV/LVA ordering and bounded quiescence.
-//!
-//! There is no transposition table, principal-variation search, aspiration
-//! window, null move, late-move reduction, selective pruning, neural-network,
-//! tablebase, UCI, GPU or threading infrastructure in this crate.
+//! A square array and occupancy bitboards support legal move generation,
+//! reversible moves, incremental Zobrist hashing and history-aware draws.
+//! Search uses iterative-deepening negamax with alpha-beta pruning, previous-PV
+//! and MVV/LVA ordering, and bounded quiescence.
 //!
 //! # Search and evaluation boundary
 //!
 //! [`search::search`] takes a [`Game`], an [`eval::Evaluator`] and a
 //! [`search::SearchConfig`], clones the game once and reports a truthful
-//! [`search::SearchResult`]. Search own only rule adjudication and terminal
+//! [`search::SearchResult`]. Search owns rule adjudication and terminal
 //! scoring; every leaf score comes from the evaluator. A caller that needs to
 //! interrupt a running search can pass a [`search::SearchControl`] to
 //! [`search::search_controlled`]; the token is standard-library-only, polled at
@@ -27,10 +20,17 @@
 //! `E: Evaluator + ?Sized`, so a concrete evaluator avoids mandatory dynamic
 //! dispatch while `&dyn Evaluator` callers keep working unchanged.
 //! [`eval::features`] fixes the versioned 768-input binary piece-square schema
-//! a future neural evaluator will consume, with allocation-free extraction and
-//! delta updates. It is a boundary, not an implemented model.
-//! [`Undo::piece_changes`] remains the interface a future incremental evaluator
-//! can consume; a future transposition table can key on [`Position::hash`], but
+//! (v1) with allocation-free extraction and delta updates.
+//! [`eval::n2`] is the implemented neural evaluator: a separately versioned
+//! 781-input absolute-colour schema, an exact integer forward pass over an
+//! embedded, checksummed model asset, and [`eval::n2::session`], which maintains
+//! the accumulator incrementally across reversible make/unmake. Its output is
+//! converted from the model's white-relative convention to side-to-move
+//! centipawns and is opt-in through the UCI `Eval` option; the classical
+//! evaluator stays the default. The bundled weights were trained on the
+//! Lichess Open Database; the original export was not independently verified.
+//! [`Undo::piece_changes`] is the interface the incremental evaluator consumes;
+//! a future transposition table can key on [`Position::hash`], but
 //! draw-sensitive scores would also need the halfmove clock and path-dependent
 //! repetition context.
 //!
@@ -70,6 +70,8 @@ pub mod history;
 pub mod movegen;
 pub mod perft;
 pub mod position;
+#[cfg(feature = "profiling")]
+pub mod profiling;
 pub mod search;
 pub mod types;
 

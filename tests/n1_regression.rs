@@ -1,4 +1,4 @@
-//! Mission N1 regression snapshots captured from the unchanged original
+//! Classical evaluation regression snapshots captured from the unchanged original
 //! evaluation/search implementation at `master` HEAD 1446a74.
 //!
 //! These are behavioural fixtures, not tuning targets: every value here was

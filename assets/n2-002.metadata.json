@@ -1,0 +1,55 @@
+{
+  "model": "Horseflight N2-002",
+  "checkpoint_epoch": 10,
+  "architecture": [
+    781,
+    256,
+    32,
+    1
+  ],
+  "feature_count": 781,
+  "padding_index": 781,
+  "feature_order": {
+    "piece_square": "((color_offset + piece_type - 1) * 64) + square",
+    "color_offsets": {
+      "white": 0,
+      "black": 6
+    },
+    "piece_types": [
+      "pawn",
+      "knight",
+      "bishop",
+      "rook",
+      "queen",
+      "king"
+    ],
+    "square_order": "a1=0 through h8=63",
+    "white_to_move": 768,
+    "castling": {
+      "K": 769,
+      "Q": 770,
+      "k": 771,
+      "q": 772
+    },
+    "legal_en_passant_files": [
+      773,
+      774,
+      775,
+      776,
+      777,
+      778,
+      779,
+      780
+    ]
+  },
+  "quantization": {
+    "accumulator_scale": 256,
+    "activation_max": 127,
+    "hidden_weight_scale": 128,
+    "output_weight_scale": 256,
+    "rounding": "ties_to_even"
+  },
+  "output_cp_multiplier": 400,
+  "score_perspective": "white_relative_pending_provenance_verification",
+  "reference": "Python Cell 16 integer_nnue"
+}

@@ -36,12 +36,12 @@
 //! # Terminal, draw and claim adjudication
 //!
 //! Rule state is checked before any evaluation, including at depth zero and at
-//! q-depth limits, in the Phase 1A precedence order: checkmate, stalemate,
+//! q-depth limits, in this order: checkmate, stalemate,
 //! insufficient material, seventy-five-move, fivefold repetition. Scores are
 //! root-relative: a loss at `ply` is `-MATE_SCORE + ply`, so shorter wins and
 //! longer losses are preferred.
 //!
-//! Claimable threefold and fifty-move draws follow the Phase 1A intended-move
+//! Claimable threefold and fifty-move draws follow the intended-move
 //! semantics and are modelled as **optional zero-score actions**: the side to
 //! move may claim a draw, but search keeps any positive continuation. A current
 //! claim needs only the position; an intended claim is probed on every quiet
@@ -81,7 +81,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::eval::{self, Evaluator, INFINITY, MATE_SCORE};
+use crate::eval::{self, EvaluationSession, Evaluator, INFINITY, MATE_SCORE};
 use crate::history::{Game, Outcome};
 use crate::position::Position;
 use crate::types::{Move, Role};
@@ -323,7 +323,7 @@ pub fn search<E: Evaluator + ?Sized>(
     evaluator: &E,
     config: &SearchConfig,
 ) -> Result<SearchResult, ConfigError> {
-    search_inner(game, evaluator, config, None)
+    search_inner(game, evaluator, config, None, None)
 }
 
 /// Search `game` cooperatively, stopping at a bounded check when `control` is
@@ -341,19 +341,58 @@ pub fn search_controlled<E: Evaluator + ?Sized>(
     config: &SearchConfig,
     control: &SearchControl,
 ) -> Result<SearchResult, ConfigError> {
-    search_inner(game, evaluator, config, Some(control))
+    search_inner(game, evaluator, config, Some(control), None)
 }
 
-fn search_inner<E: Evaluator + ?Sized>(
+/// Search `game` with an incremental evaluation session, without mutating it.
+///
+/// This runs exactly the search [`search`] runs: same move ordering, quiescence,
+/// node accounting and stop reasons. Every successful make is reported to
+/// `session` and every matching unmake reverses it, so a session always ends a
+/// search balanced, whatever the stop reason. `session` is reset from the root
+/// before the search starts, so a reused session is always correct. The
+/// stateless `evaluator` is unused while a session is installed; it stays in the
+/// signature so callers keep one evaluator identity for both paths.
+pub fn search_with_session<E, S>(
     game: &Game,
     evaluator: &E,
+    session: &mut S,
     config: &SearchConfig,
-    control: Option<&SearchControl>,
+) -> Result<SearchResult, ConfigError>
+where
+    E: Evaluator + ?Sized,
+    S: EvaluationSession,
+{
+    search_inner(game, evaluator, config, None, Some(session))
+}
+
+/// [`search_with_session`] with cooperative cancellation.
+pub fn search_controlled_with_session<E, S>(
+    game: &Game,
+    evaluator: &E,
+    session: &mut S,
+    config: &SearchConfig,
+    control: &SearchControl,
+) -> Result<SearchResult, ConfigError>
+where
+    E: Evaluator + ?Sized,
+    S: EvaluationSession,
+{
+    search_inner(game, evaluator, config, Some(control), Some(session))
+}
+
+fn search_inner<'a, E: Evaluator + ?Sized>(
+    game: &Game,
+    evaluator: &'a E,
+    config: &SearchConfig,
+    control: Option<&'a SearchControl>,
+    session: Option<&'a mut dyn EvaluationSession>,
 ) -> Result<SearchResult, ConfigError> {
     let config = config.validate()?;
     let mut worker = Worker {
         game: game.clone(),
         evaluator,
+        session,
         config,
         control,
         nodes: 0,
@@ -392,6 +431,9 @@ struct Iteration {
 struct Worker<'a, E: Evaluator + ?Sized> {
     game: Game,
     evaluator: &'a E,
+    /// Optional incremental evaluation state; when present it replaces
+    /// `evaluator` for every static evaluation.
+    session: Option<&'a mut dyn EvaluationSession>,
     config: SearchConfig,
     control: Option<&'a SearchControl>,
     nodes: u64,
@@ -403,6 +445,11 @@ struct Worker<'a, E: Evaluator + ?Sized> {
 impl<E: Evaluator + ?Sized> Worker<'_, E> {
     fn run(&mut self) -> SearchResult {
         let started = Instant::now();
+        // A reused session may carry state from an earlier search or a caller
+        // that made moves directly; rebuild it from the actual root once.
+        if let Some(session) = self.session.as_deref_mut() {
+            session.reset(self.game.position());
+        }
         let outcome = self.game.outcome();
         if outcome.is_over() {
             let score = match outcome {
@@ -538,7 +585,7 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
         }
     }
 
-    /// Current and intended-move claims at the root, using the Phase 1A rule API.
+    /// Current and intended-move claims at the root.
     ///
     /// Cancellation is polled before each costly intended-move simulation, so a
     /// token cancelled during this scan stops before another probe begins.
@@ -745,7 +792,7 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
         }
 
         if !in_check {
-            let stand_pat = self.static_evaluation(&position);
+            let stand_pat = self.static_evaluation(&position, false);
             if stand_pat >= beta {
                 return Ok(stand_pat);
             }
@@ -793,6 +840,8 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
     /// static evaluation only. This is a diagnostic baseline, not a search.
     fn evaluate_frontier(&mut self, ply: u32) -> Result<i32, Stop> {
         self.reserve_node(true)?;
+        #[cfg(feature = "profiling")]
+        crate::profiling::record_frontier_node();
         let position = *self.game.position();
         let legal = position.legal_moves();
         let in_check = position.in_check();
@@ -810,7 +859,7 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
             return Err(Stop::PlyCap);
         }
         let claim = self.claim_available(&position, &legal)?;
-        let static_score = self.static_evaluation(&position);
+        let static_score = self.static_evaluation(&position, true);
         Ok(if claim {
             static_score.max(0)
         } else {
@@ -829,6 +878,11 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
         if quiescence {
             self.q_nodes += 1;
         }
+        // Counted only once the node is really entered, so the split sums to
+        // `SearchResult::nodes`; frontier leaves are a subset of the
+        // quiescence count and are reported separately.
+        #[cfg(feature = "profiling")]
+        crate::profiling::record_node(quiescence);
         Ok(())
     }
 
@@ -837,11 +891,36 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
         movement: Move,
         search: impl FnOnce(&mut Self) -> Result<i32, Stop>,
     ) -> Result<i32, Stop> {
-        self.game
+        let before = *self.game.position();
+        #[cfg(feature = "profiling")]
+        let evaluations_before = crate::profiling::static_evaluations();
+        let undo = self
+            .game
             .play_generated(movement)
             .map_err(|_| Stop::Transition)?;
+        if let Some(session) = self.session.as_deref_mut() {
+            session.on_make(undo.piece_changes(), &before, self.game.position());
+        }
         let searched = search(self);
         let restored = self.game.undo();
+        // Unwind the session on every exit path, including a stop error: the
+        // game position was restored (or the worker is already inconsistent),
+        // so the session must be balanced too.
+        //
+        // A failed undo is safe here without any extra session work:
+        // `Game::undo` only fails when `Position::unmake` rejects the top
+        // record, and it then pushes that record back, so the worker's clone is
+        // already inconsistent. The `Transition` stop below aborts the current
+        // iteration before any further static evaluation, and the next
+        // `search_with_session` call resets the session from its own root
+        // state, so no accumulator state can leak into a later search.
+        if let Some(session) = self.session.as_deref_mut() {
+            session.on_unmake();
+        }
+        #[cfg(feature = "profiling")]
+        if crate::profiling::static_evaluations() == evaluations_before {
+            crate::profiling::record_prepared_unevaluated_subtree();
+        }
         match (searched, restored) {
             (Ok(score), Ok(_)) => Ok(score),
             (Err(stop), _) => Err(stop),
@@ -849,11 +928,23 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
         }
     }
 
-    fn static_evaluation(&self, position: &Position) -> i32 {
-        eval::clamp_evaluation(self.evaluator.evaluate(position))
+    fn static_evaluation(&self, position: &Position, frontier: bool) -> i32 {
+        let _ = frontier;
+        #[cfg(feature = "profiling")]
+        let started = std::time::Instant::now();
+        let raw = match self.session.as_deref() {
+            Some(session) => session.evaluate(position),
+            None => self.evaluator.evaluate(position),
+        };
+        #[cfg(feature = "profiling")]
+        {
+            crate::profiling::record_static_evaluation(position.hash(), frontier);
+            crate::profiling::record_evaluation_time(started.elapsed());
+        }
+        eval::clamp_evaluation(raw)
     }
 
-    /// Automatic draws in Phase 1A precedence order, after checkmate/stalemate.
+    /// Automatic draws after checkmate and stalemate.
     fn automatic_draw(&self, position: &Position) -> bool {
         if position.has_insufficient_material() {
             return true;
@@ -919,11 +1010,20 @@ impl<E: Evaluator + ?Sized> Worker<'_, E> {
             if fifty {
                 return Ok(true);
             }
-            self.game
+            let before = *self.game.position();
+            let undo = self
+                .game
                 .play_generated(movement)
                 .map_err(|_| Stop::Transition)?;
+            if let Some(session) = self.session.as_deref_mut() {
+                session.on_make(undo.piece_changes(), &before, self.game.position());
+            }
             let repetitions = self.repetition_count(self.game.position());
-            self.game.undo().map_err(|_| Stop::Transition)?;
+            let restored = self.game.undo().map_err(|_| Stop::Transition);
+            if let Some(session) = self.session.as_deref_mut() {
+                session.on_unmake();
+            }
+            restored?;
             if repetitions >= 3 {
                 return Ok(true);
             }
@@ -1028,6 +1128,7 @@ mod tests {
         Worker {
             game,
             evaluator,
+            session: None,
             config: SearchConfig {
                 max_depth: 1,
                 node_limit: 100_000,
@@ -1094,6 +1195,7 @@ mod tests {
         let mut worker = Worker {
             game: history,
             evaluator: &HandcraftedEvaluator,
+            session: None,
             config: SearchConfig::default(),
             control: Some(&control),
             nodes: 0,
@@ -1158,6 +1260,7 @@ mod tests {
         let mut worker = Worker {
             game: Game::from_fen("7k/8/8/8/8/8/8/K1Q5 w - - 0 1").unwrap(),
             evaluator,
+            session: None,
             config: SearchConfig::default(),
             control: Some(&control),
             nodes: 0,
@@ -1256,6 +1359,44 @@ mod tests {
         assert_eq!(worker.game.history_len(), before_history);
         assert_eq!(worker.game.positions().len(), before_positions);
         assert_eq!(worker.game.current_repetition_count(), 1);
+    }
+
+    #[test]
+    fn a_ply_cap_stop_unwinds_a_session_balanced() {
+        use crate::eval::n2::session::Session;
+        use crate::eval::n2::N2Evaluator;
+
+        let root = Game::from_fen("7k/8/8/8/8/8/8/K1Q5 w - - 0 1").unwrap();
+        let mut session = Session::new(root.position());
+        assert!(session.matches_rebuild(root.position()));
+        let mut worker = Worker {
+            game: root.clone(),
+            evaluator: &N2Evaluator,
+            session: Some(&mut session),
+            config: SearchConfig::default(),
+            control: None,
+            nodes: 0,
+            q_nodes: 0,
+            previous_pv: Vec::new(),
+            pv: vec![Vec::new(); MAX_PLY as usize + 1],
+        };
+        let first = worker.game.position().legal_moves()[0];
+        let stop = worker
+            .search_child(first, |inner| {
+                let second = inner.game.position().legal_moves()[0];
+                inner.search_child(second, |leaf| {
+                    leaf.quiescence(MAX_PLY, 1, -INFINITY, INFINITY)
+                })
+            })
+            .expect_err("the capped frontier must abort");
+        assert!(matches!(stop, Stop::PlyCap));
+        // The game was restored...
+        assert_eq!(worker.game.position().to_fen(), root.position().to_fen());
+        assert_eq!(worker.game.history_len(), 0);
+        drop(worker);
+        // ...and the session made two moves and unwound both on the error path.
+        assert_eq!(session.depth(), 0);
+        assert!(session.matches_rebuild(root.position()));
     }
 
     #[test]

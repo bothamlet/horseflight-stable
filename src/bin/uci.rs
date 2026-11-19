@@ -1,11 +1,8 @@
 //! Minimal UCI adapter for benchmarking Horseflight.
 //!
-//! This binary is a protocol shell only: every move comes from the same
-//! [`horseflight::search()`] call the cockpit uses, with the crate's default
-//! handcrafted evaluator and the documented ordering/quiescence settings. It
-//! adds no chess knowledge, opening book, tablebase or opponent-specific
-//! tuning. The only new logic is UCI plumbing and a clock-to-deadline
-//! translation, because the engine itself searches by depth or node budget.
+//! The `Eval` option selects the classical evaluator (default) or the embedded
+//! N2-002 NNUE with incremental accumulation. This adapter translates UCI
+//! commands and clock limits into engine search requests.
 //!
 //! Time management is deliberately simple and conservative: a fraction of the
 //! remaining clock plus the increment, cancelled by the engine's own
@@ -18,6 +15,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use horseflight::eval::mate_distance_plies;
+use horseflight::eval::n2::session::Session;
+use horseflight::eval::n2::{self, N2Evaluator};
+use horseflight::search::search_controlled_with_session;
 use horseflight::{
     search_controlled, Game, HandcraftedEvaluator, Move, Role, SearchAction, SearchConfig,
     SearchControl, SearchResult, Square,
@@ -33,6 +33,14 @@ fn main() {
     let stdin = io::stdin();
     let mut game = Game::startpos();
     let mut active: Option<ActiveSearch> = None;
+    let mut evaluator = EvaluatorChoice::Classical;
+    // The per-search evaluator diagnostic is only emitted for a client that
+    // opened a real UCI session. A driver that never sends `uci` (for example
+    // the pinned N1 search-output regression) therefore keeps seeing exactly the
+    // original `info`/`bestmove` stream, while every GUI and match runner still
+    // gets the active-evaluator evidence it needs. `setoption` replies are
+    // treated the same way: a client that never handshook never asked for them.
+    let mut handshake = false;
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -45,20 +53,68 @@ fn main() {
         };
         match command {
             "uci" => {
+                handshake = true;
                 out(&format!("id name {ENGINE_NAME}"));
                 out(&format!("id author {ENGINE_AUTHOR}"));
-                // No options are declared: every setting below is fixed so the
-                // benchmark measures the engine as built.
+                out("option name Eval type combo default classical var classical var nnue");
+                out(&format!(
+                    "info string n2 model={} asset_sha256={} perspective={} \
+                     training_data=lichess-open-database",
+                    n2::MODEL_ID,
+                    n2::asset_sha256(),
+                    n2::DERIVED_SCORE_PERSPECTIVE
+                ));
                 out("uciok");
             }
             "isready" => out("readyok"),
             "ucinewgame" => {
                 stop_search(&mut active);
                 game = Game::startpos();
+                // `ucinewgame` resets the game, never the selected evaluator.
             }
-            "setoption" => {
-                // Accepted and ignored: this adapter exposes no options.
-            }
+            "setoption" => match parse_setoption(&tokens.collect::<Vec<_>>()) {
+                // Only a real selection change interrupts a running search; an
+                // unknown option or value is reported and changes nothing, as
+                // it always has.
+                Ok((name, value)) if name == "Eval" => match EvaluatorChoice::parse(&value) {
+                    Some(choice) => {
+                        stop_search(&mut active);
+                        evaluator = choice;
+                        if handshake {
+                            match choice {
+                                EvaluatorChoice::Classical => {
+                                    out("info string Eval=classical");
+                                }
+                                EvaluatorChoice::Nnue => out(&format!(
+                                    "info string Eval=nnue model={} asset_sha256={} \
+                                     perspective={} training_data=lichess-open-database",
+                                    n2::MODEL_ID,
+                                    n2::asset_sha256(),
+                                    n2::DERIVED_SCORE_PERSPECTIVE
+                                )),
+                            }
+                        }
+                    }
+                    None => {
+                        if handshake {
+                            out(&format!(
+                                "info string unknown Eval value {value:?}; keeping {}",
+                                evaluator.as_str()
+                            ));
+                        }
+                    }
+                },
+                Ok((name, _)) => {
+                    if handshake {
+                        out(&format!("info string unknown option {name:?}"));
+                    }
+                }
+                Err(message) => {
+                    if handshake {
+                        out(&format!("info string {message}"));
+                    }
+                }
+            },
             "position" => match parse_position(tokens.collect::<Vec<_>>()) {
                 Ok(new_game) => {
                     stop_search(&mut active);
@@ -69,7 +125,7 @@ fn main() {
             "go" => {
                 stop_search(&mut active);
                 let limits = parse_go(tokens.collect::<Vec<_>>());
-                active = Some(spawn_search(game.clone(), limits));
+                active = Some(spawn_search(game.clone(), limits, evaluator, handshake));
             }
             "stop" => stop_search(&mut active),
             "ponderhit" => {}
@@ -233,11 +289,69 @@ fn search_config(limits: &GoLimits) -> SearchConfig {
     }
 }
 
-fn spawn_search(game: Game, limits: GoLimits) -> ActiveSearch {
+/// The selected evaluation path. Classical is the default and reproduces the
+/// pre-NNUE engine exactly; `nnue` is opt-in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EvaluatorChoice {
+    Classical,
+    Nnue,
+}
+
+impl EvaluatorChoice {
+    fn parse(value: &str) -> Option<EvaluatorChoice> {
+        match value {
+            "classical" => Some(EvaluatorChoice::Classical),
+            "nnue" => Some(EvaluatorChoice::Nnue),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            EvaluatorChoice::Classical => "classical",
+            EvaluatorChoice::Nnue => "nnue",
+        }
+    }
+}
+
+/// Parse the `name <name> value <value>` body of a `setoption` command.
+fn parse_setoption(tokens: &[&str]) -> Result<(String, String), String> {
+    let Some(rest) = tokens.strip_prefix(&["name"][..]) else {
+        return Err("setoption expects name".to_string());
+    };
+    let Some(position) = rest.iter().position(|token| *token == "value") else {
+        return Err("setoption expects value".to_string());
+    };
+    if position == 0 {
+        return Err("setoption expects an option name".to_string());
+    }
+    let name = rest[..position].join(" ");
+    let value = rest[position + 1..].join(" ");
+    Ok((name, value))
+}
+
+fn spawn_search(
+    game: Game,
+    limits: GoLimits,
+    evaluator: EvaluatorChoice,
+    report_evaluator: bool,
+) -> ActiveSearch {
     let budget = time_budget_ms(&game, &limits);
     let config = search_config(&limits);
     let control = SearchControl::new();
     let worker_control = control.clone();
+
+    // External logs can prove which evaluator actually ran. Printed before the
+    // search thread starts so the line always precedes its info/bestmove pair.
+    if report_evaluator {
+        match evaluator {
+            EvaluatorChoice::Classical => out("info string eval=classical"),
+            EvaluatorChoice::Nnue => out(&format!(
+                "info string eval=nnue model_sha256={}",
+                n2::asset_sha256()
+            )),
+        }
+    }
 
     let handle = thread::spawn(move || {
         // The deadline waiter parks on the channel, so it leaves as soon as the
@@ -257,7 +371,23 @@ fn spawn_search(game: Game, limits: GoLimits) -> ActiveSearch {
             (finished, waiter)
         });
         let started = Instant::now();
-        let result = search_controlled(&game, &HandcraftedEvaluator, &config, &worker_control);
+        let result = match evaluator {
+            EvaluatorChoice::Classical => {
+                search_controlled(&game, &HandcraftedEvaluator, &config, &worker_control)
+            }
+            EvaluatorChoice::Nnue => {
+                // The session is owned by this search: reset happens inside the
+                // search, and the session is dropped (balanced) when it ends.
+                let mut session = Session::new(game.position());
+                search_controlled_with_session(
+                    &game,
+                    &N2Evaluator,
+                    &mut session,
+                    &config,
+                    &worker_control,
+                )
+            }
+        };
         if let Some((finished, waiter)) = deadline {
             let _ = finished.send(());
             let _ = waiter.join();
@@ -422,6 +552,34 @@ mod tests {
             time_budget_ms(&start, &limits("wtime 60000 movestogo 40")),
             Some(59960 / 41)
         );
+    }
+
+    #[test]
+    fn setoption_parses_name_and_value() {
+        assert_eq!(
+            parse_setoption(&["name", "Eval", "value", "nnue"]),
+            Ok(("Eval".to_string(), "nnue".to_string()))
+        );
+        assert_eq!(
+            parse_setoption(&["name", "My", "Option", "value", "two", "words"]),
+            Ok(("My Option".to_string(), "two words".to_string()))
+        );
+        assert!(parse_setoption(&["value", "nnue"]).is_err());
+        assert!(parse_setoption(&["name", "Eval"]).is_err());
+        assert!(parse_setoption(&["name", "value", "nnue"]).is_err());
+    }
+
+    #[test]
+    fn evaluator_choice_is_exact_and_classical_by_default() {
+        assert_eq!(
+            EvaluatorChoice::parse("classical"),
+            Some(EvaluatorChoice::Classical)
+        );
+        assert_eq!(EvaluatorChoice::parse("nnue"), Some(EvaluatorChoice::Nnue));
+        assert_eq!(EvaluatorChoice::parse("NNUE"), None);
+        assert_eq!(EvaluatorChoice::parse(""), None);
+        assert_eq!(EvaluatorChoice::Classical.as_str(), "classical");
+        assert_eq!(EvaluatorChoice::Nnue.as_str(), "nnue");
     }
 
     #[test]

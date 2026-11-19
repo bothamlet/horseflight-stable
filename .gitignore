@@ -1,6 +1,6 @@
 /target/
+/.venv/
+/.pi/
+research_data/
 __pycache__/
-*.pyc
-/web/
-/scripts/run-cockpit.sh
-bench/tools/
+.ipynb_checkpoints/

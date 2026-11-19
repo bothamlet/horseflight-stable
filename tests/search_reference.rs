@@ -2,7 +2,7 @@
 //!
 //! This oracle deliberately shares no recursion with the production search: it
 //! is a full-width, no-pruning negamax with its own quiescence frontier, and it
-//! adjudicates rules through the Phase 1A public API (`Game::outcome`,
+//! adjudicates rules through the public API (`Game::outcome`,
 //! `Game::claimable_now`, `Game::claimable_after`) rather than the search's
 //! fast paths. Production alpha-beta with ordering on and off must agree with
 //! it on the exact root score and on optimal-move membership.

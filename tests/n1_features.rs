@@ -1,4 +1,4 @@
-//! Mission N1 feature-schema tests: literal cross-language golden vectors,
+//! Piece-square feature tests: literal cross-language golden vectors,
 //! exhaustive index coverage, perspective/mirror symmetry, metadata exclusion,
 //! incremental delta parity and oversized structurally-valid positions.
 //!

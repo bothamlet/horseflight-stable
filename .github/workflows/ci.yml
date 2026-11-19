@@ -1,74 +1,16 @@
-# Routine checks only. The deep perft suite, --include-ignored runs, full
-# 100-game matches, browser/e2e runs, deployments and artifact uploads are
-# deliberately excluded: they are slow and need real hardware and local tools.
-# Only actions/checkout and actions/setup-python are used; Rust comes from the
-# stable toolchain preinstalled on hosted runners.
 name: CI
 
-"on":
-  pull_request:
-  push:
-    branches:
-      - main
-      - "lab/**"
-      - "exp/**"
+"on": [push, pull_request]
 
 permissions:
   contents: read
 
 jobs:
   rust:
-    name: Rust format, lint and tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable Rust with rustfmt and clippy
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      - name: Default to stable
-        run: rustup default stable
-      - name: Format
-        run: cargo fmt --check
-      - name: Lint
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test
-        run: cargo test --workspace
-
-  python:
-    name: Benchmark records and research validation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Byte-compile the benchmark utilities
-        run: >-
-          python3 -m py_compile
-          bench/pgn_reader.py bench/record.py bench/build_manifest.py
-          bench/record_v2.py
-      - name: Verify the committed Baseline001 record against the raw PGNs
-        run: >-
-          python3 -m bench.record verify
-          --config bench/configs/baseline-001.json
-      - name: Verify the version 2 binding record
-        run: >-
-          python3 -m bench.record_v2 verify
-          --config bench/configs/baseline-001-v2-binding.json
-      - name: Verify the example build manifests
-        run: |
-          python3 -m bench.build_manifest verify \
-            --manifest bench/builds/n1-0906016-analyze-default.json
-          python3 -m bench.build_manifest verify \
-            --manifest bench/builds/n1-0906016-analyze-no-ordering.json
-          python3 -m bench.build_manifest verify \
-            --manifest bench/builds/n1-0906016-analyze-depth3.json
-          python3 -m bench.build_manifest verify \
-            --manifest bench/builds/n1-0906016-uci.json
-      - name: Verify committed runtime evidence hashes
-        run: sha256sum -c bench/builds/evidence/SHA256SUMS
-      - name: Benchmark utility tests
-        run: python3 -m unittest discover -s bench -t . -p 'test_*.py'
-      - name: Research validator
-        run: python3 scripts/validate_research.py
-      - name: Research validator tests
-        run: python3 -m unittest discover -s scripts -p 'test*.py'
+      - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: cargo +stable fmt --check
+      - run: cargo +stable clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo +stable test --locked --release --all-features

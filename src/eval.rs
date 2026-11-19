@@ -41,13 +41,14 @@
 
 pub mod classical;
 pub mod features;
+pub mod n2;
 
 pub use classical::{
     role_value, HandcraftedEvaluator, MaterialEvaluator, BISHOP_VALUE, KING_VALUE, KNIGHT_VALUE,
     PAWN_VALUE, QUEEN_VALUE, ROOK_VALUE,
 };
 
-use crate::position::Position;
+use crate::position::{PieceChange, Position};
 
 /// A replaceable position evaluator.
 ///
@@ -56,6 +57,28 @@ use crate::position::Position;
 /// [`clamp_evaluation`] either way.
 pub trait Evaluator {
     fn evaluate(&self, position: &Position) -> i32;
+}
+
+/// An evaluator that also maintains reversible state across make/unmake.
+///
+/// Search only calls this boundary when a caller explicitly supplies a
+/// session; [`Evaluator`] stays the stateless contract, so every existing
+/// evaluator and caller is unchanged. Implementations must hold an evaluation
+/// for the *current* position after [`EvaluationSession::reset`], keep it
+/// exactly in step through [`EvaluationSession::on_make`] and
+/// [`EvaluationSession::on_unmake`], and return to the reset state when every
+/// make has been matched by an unmake. [`EvaluationSession::evaluate`] returns
+/// side-to-move centipawns, like [`Evaluator::evaluate`]; search clamps it with
+/// [`clamp_evaluation`].
+pub trait EvaluationSession {
+    /// Side-to-move centipawns for the current position of the session.
+    fn evaluate(&self, position: &Position) -> i32;
+    /// Advance the session over one legal move.
+    fn on_make(&mut self, changes: &[PieceChange], before: &Position, after: &Position);
+    /// Reverse the most recent [`EvaluationSession::on_make`].
+    fn on_unmake(&mut self);
+    /// Rebuild the session from `root` and discard any recorded history.
+    fn reset(&mut self, root: &Position);
 }
 
 /// Largest score a proven mate can produce at the root.

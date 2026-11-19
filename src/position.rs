@@ -30,7 +30,11 @@ impl PieceChange {
     }
 }
 
-const MAX_PIECE_CHANGES: usize = 4;
+/// Largest number of squares one move can change.
+///
+/// Public so an incremental evaluator can size its own per-move delta records
+/// against the same authoritative bound instead of duplicating the number.
+pub const MAX_PIECE_CHANGES: usize = 4;
 
 #[derive(Clone, Copy, Debug)]
 struct ChangeLog {

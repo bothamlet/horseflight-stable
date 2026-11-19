@@ -1,4 +1,4 @@
-//! Mission N1 real-process UCI regression.
+//! Classical UCI output regression.
 //!
 //! The reference output below was captured from the unchanged original binary
 //! at `master` HEAD 1446a74. Only `nps` and `time` (wall-clock measurements)
